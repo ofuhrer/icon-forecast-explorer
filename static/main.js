@@ -699,7 +699,7 @@ function ensureWindVectorLayer() {
       source: sourceId,
       paint: {
         "line-color": "rgba(15, 23, 42, 0.85)",
-        "line-width": ["interpolate", ["linear"], ["get", "speed"], 0, 1.0, 120, 2.6],
+        "line-width": ["interpolate", ["linear"], ["get", "speed"], 0, 1.3, 120, 3.2],
         "line-opacity": 0.9,
       },
       layout: {

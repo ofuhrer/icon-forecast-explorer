@@ -8271,3 +8271,549 @@ weather_data.OGDRequestError: OGD fetch failed for variable=SNOW ref=2026-02-25T
 2026-02-25 17:43:16,184 WARNING [icon_forecast] Tile request runtime error: OGD fetch failed for variable=SNOW ref=2026-02-25T12:00:00Z lead=0 after 3 attempts: list index out of range
 2026-02-25 17:43:16,259 INFO [icon_forecast] App shutdown
 2026-02-25 17:43:16,262 INFO [icon_forecast.weather_data] Stopped background workers
+2026-02-25 20:48:48,092 INFO [icon_forecast] Logger configured level=DEBUG file=logs/icon_forecast.log
+2026-02-25 20:48:48,138 INFO [icon_forecast] App startup
+2026-02-25 20:48:48,138 INFO [icon_forecast.weather_data] Started hot prewarm thread
+2026-02-25 20:48:53,677 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v4_icon-ch1-eps-control_control_t_2m_u1_2026022515_000.npz bytes=583965
+2026-02-25 20:48:54,619 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v4_icon-ch1-eps-control_control_t_2m_u1_2026022515_006.npz bytes=597398
+2026-02-25 20:48:55,519 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v4_icon-ch1-eps-control_control_t_2m_u1_2026022515_012.npz bytes=598868
+2026-02-25 20:48:56,092 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v4_icon-ch1-eps-control_control_tot_prec_u1_2026022515_000.npz bytes=1033
+2026-02-25 20:48:56,948 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v4_icon-ch1-eps-control_control_tot_prec_u1_2026022515_006.npz bytes=9767
+2026-02-25 20:48:57,931 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v4_icon-ch1-eps-control_control_tot_prec_u1_2026022515_012.npz bytes=49580
+2026-02-25 20:48:59,431 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 20:48:59,585 DEBUG [icon_forecast] Field debug cache miss dataset=icon-ch1-eps-control type=control var=ceiling init=2026022515 lead=0
+2026-02-25 20:48:59,586 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch1-eps-control', 'control', 'ceiling', '2026022515', 1)
+2026-02-25 20:48:59,590 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch1-eps-control', 'control', 'ceiling', '2026022515', 0)
+2026-02-25 20:48:59,593 DEBUG [icon_forecast] Prefetch request dataset=icon-ch1-eps-control type=control var=ceiling init=2026022515 lead=1 queued=True
+2026-02-25 20:48:59,599 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=ceiling init=2026022515 lead=0 z=8 x=133 y=90
+2026-02-25 20:48:59,606 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=ceiling init=2026022515 lead=0 z=8 x=134 y=90
+2026-02-25 20:48:59,607 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=ceiling init=2026022515 lead=0 z=8 x=133 y=89
+2026-02-25 20:48:59,608 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=ceiling init=2026022515 lead=0 z=8 x=134 y=89
+2026-02-25 20:48:59,608 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=ceiling init=2026022515 lead=0 z=8 x=133 y=91
+2026-02-25 20:48:59,613 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=ceiling init=2026022515 lead=0 z=8 x=132 y=90
+2026-02-25 20:49:00,530 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v4_icon-ch1-eps-control_control_ceiling_u1_2026022515_001.npz bytes=113606
+2026-02-25 20:49:00,630 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v4_icon-ch1-eps-control_control_ceiling_u1_2026022515_000.npz bytes=126923
+2026-02-25 20:49:14,739 DEBUG [icon_forecast] Field debug cache miss dataset=icon-ch1-eps-control type=control var=wind_speed_10m init=2026022515 lead=0
+2026-02-25 20:49:14,740 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch1-eps-control', 'control', 'wind_speed_10m', '2026022515', 0)
+2026-02-25 20:49:14,747 DEBUG [icon_forecast] Field debug cache miss dataset=icon-ch1-eps-control type=control var=wind_speed_10m init=2026022515 lead=0
+2026-02-25 20:49:14,751 DEBUG [icon_forecast] Value cache miss dataset=icon-ch1-eps-control type=control var=wind_speed_10m init=2026022515 lead=0 queued=False
+2026-02-25 20:49:14,752 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch1-eps-control', 'control', 'wind_speed_10m', '2026022515', 1)
+2026-02-25 20:49:14,755 DEBUG [icon_forecast] Prefetch request dataset=icon-ch1-eps-control type=control var=wind_speed_10m init=2026022515 lead=1 queued=True
+2026-02-25 20:49:14,763 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=wind_speed_10m init=2026022515 lead=0 z=8 x=133 y=90
+2026-02-25 20:49:14,764 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=wind_speed_10m init=2026022515 lead=0 z=8 x=134 y=90
+2026-02-25 20:49:14,767 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=wind_speed_10m init=2026022515 lead=0 z=8 x=133 y=91
+2026-02-25 20:49:14,770 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=wind_speed_10m init=2026022515 lead=0 z=8 x=134 y=91
+2026-02-25 20:49:14,771 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=wind_speed_10m init=2026022515 lead=0 z=8 x=133 y=89
+2026-02-25 20:49:14,771 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=wind_speed_10m init=2026022515 lead=0 z=8 x=134 y=89
+2026-02-25 20:49:16,657 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v4_icon-ch1-eps-control_control_wind_speed_10m_u2_2026022515_000.npz bytes=731514
+2026-02-25 20:49:16,986 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v4_icon-ch1-eps-control_control_wind_speed_10m_u2_2026022515_001.npz bytes=732455
+2026-02-25 20:49:17,896 DEBUG [icon_forecast.weather_data] Saved wind vector cache path=cache/vectors/v4_icon-ch1-eps-control_control_wind_vectors_u2_2026022515_000.npz bytes=1314161
+2026-02-25 20:49:19,481 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 20:49:27,035 DEBUG [icon_forecast] Field debug cache miss dataset=icon-ch1-eps-control type=control var=w_snow init=2026022515 lead=0
+2026-02-25 20:49:27,036 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch1-eps-control', 'control', 'w_snow', '2026022515', 0)
+2026-02-25 20:49:27,037 DEBUG [icon_forecast] Field debug cache miss dataset=icon-ch1-eps-control type=control var=w_snow init=2026022515 lead=0
+2026-02-25 20:49:27,038 DEBUG [icon_forecast] Value cache miss dataset=icon-ch1-eps-control type=control var=w_snow init=2026022515 lead=0 queued=False
+2026-02-25 20:49:27,038 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch1-eps-control', 'control', 'w_snow', '2026022515', 1)
+2026-02-25 20:49:27,038 DEBUG [icon_forecast] Prefetch request dataset=icon-ch1-eps-control type=control var=w_snow init=2026022515 lead=1 queued=True
+2026-02-25 20:49:27,052 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=w_snow init=2026022515 lead=0 z=8 x=134 y=90
+2026-02-25 20:49:27,052 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=w_snow init=2026022515 lead=0 z=8 x=133 y=90
+2026-02-25 20:49:27,053 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=w_snow init=2026022515 lead=0 z=8 x=133 y=89
+2026-02-25 20:49:27,053 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=w_snow init=2026022515 lead=0 z=8 x=134 y=89
+2026-02-25 20:49:27,056 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=w_snow init=2026022515 lead=0 z=8 x=133 y=91
+2026-02-25 20:49:27,058 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=w_snow init=2026022515 lead=0 z=8 x=132 y=90
+2026-02-25 20:49:28,097 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v4_icon-ch1-eps-control_control_w_snow_u1_2026022515_001.npz bytes=316507
+2026-02-25 20:49:28,112 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v4_icon-ch1-eps-control_control_w_snow_u1_2026022515_000.npz bytes=316674
+2026-02-25 20:49:33,755 DEBUG [icon_forecast] Field debug cache miss dataset=icon-ch1-eps-control type=control var=snow init=2026022515 lead=0
+2026-02-25 20:49:33,755 DEBUG [icon_forecast] Field debug cache miss dataset=icon-ch1-eps-control type=control var=snow init=2026022515 lead=0
+2026-02-25 20:49:33,755 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch1-eps-control', 'control', 'snow', '2026022515', 1)
+2026-02-25 20:49:33,755 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch1-eps-control', 'control', 'snow', '2026022515', 0)
+2026-02-25 20:49:33,758 DEBUG [icon_forecast] Value cache miss dataset=icon-ch1-eps-control type=control var=snow init=2026022515 lead=0 queued=True
+2026-02-25 20:49:33,757 DEBUG [icon_forecast] Prefetch request dataset=icon-ch1-eps-control type=control var=snow init=2026022515 lead=1 queued=True
+2026-02-25 20:49:33,780 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=snow init=2026022515 lead=0 z=8 x=133 y=90
+2026-02-25 20:49:33,781 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=snow init=2026022515 lead=0 z=8 x=134 y=90
+2026-02-25 20:49:33,781 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=snow init=2026022515 lead=0 z=8 x=134 y=89
+2026-02-25 20:49:33,782 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=snow init=2026022515 lead=0 z=8 x=133 y=89
+2026-02-25 20:49:33,787 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=snow init=2026022515 lead=0 z=8 x=132 y=90
+2026-02-25 20:49:33,787 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=snow init=2026022515 lead=0 z=8 x=133 y=91
+2026-02-25 20:49:35,186 ERROR [icon_forecast.weather_data] Background field fetch failed key=('icon-ch1-eps-control', 'control', 'snow', '2026022515', 1)
+Traceback (most recent call last):
+  File "/Users/fuhrer/Desktop/geospatial/weather_data.py", line 1116, in _fetch_direct_regridded
+    data_array = ogd_api.get_from_ogd(request)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/fuhrer/Desktop/geospatial/.venv/lib/python3.11/site-packages/meteodatalab/ogd_api.py", line 334, in get_from_ogd
+    return grib_decoder.load(
+           ^^^^^^^^^^^^^^^^^^
+  File "/Users/fuhrer/Desktop/geospatial/.venv/lib/python3.11/site-packages/meteodatalab/grib_decoder.py", line 299, in load
+    buffer_map = _load_buffer_map(source, request, geo_coords=geo_coords)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/fuhrer/Desktop/geospatial/.venv/lib/python3.11/site-packages/meteodatalab/grib_decoder.py", line 218, in _load_buffer_map
+    for field in fs:
+  File "/Users/fuhrer/Desktop/geospatial/.venv/lib/python3.11/site-packages/meteodatalab/data_source.py", line 103, in _
+    yield from self._retrieve(request)
+  File "/Users/fuhrer/Desktop/geospatial/.venv/lib/python3.11/site-packages/meteodatalab/data_source.py", line 175, in _retrieve
+    fs = ekd.from_source("url", self.urls)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/fuhrer/Desktop/geospatial/.venv/lib/python3.11/site-packages/earthkit/data/sources/__init__.py", line 142, in from_source
+    src = get_source(name, *args, **kwargs)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/fuhrer/Desktop/geospatial/.venv/lib/python3.11/site-packages/earthkit/data/sources/__init__.py", line 123, in __call__
+    source = klass(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/fuhrer/Desktop/geospatial/.venv/lib/python3.11/site-packages/earthkit/data/core/__init__.py", line 22, in __call__
+    obj.__init__(*args, **kwargs)
+  File "/Users/fuhrer/Desktop/geospatial/.venv/lib/python3.11/site-packages/earthkit/data/sources/url.py", line 267, in __init__
+    self._download()
+  File "/Users/fuhrer/Desktop/geospatial/.venv/lib/python3.11/site-packages/earthkit/data/sources/url.py", line 308, in _download
+    **self.url_spec[0].kwargs,
+      ~~~~~~~~~~~~~^^^
+  File "/Users/fuhrer/Desktop/geospatial/.venv/lib/python3.11/site-packages/earthkit/data/utils/url.py", line 82, in __getitem__
+    return self.spec[n]
+           ~~~~~~~~~^^^
+IndexError: list index out of range
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/Users/fuhrer/Desktop/geospatial/weather_data.py", line 343, in _background_fetch_job
+    self.get_field(dataset_id, variable_id, init_str, int(lead_hour), type_id=str(type_id))
+  File "/Users/fuhrer/Desktop/geospatial/weather_data.py", line 551, in get_field
+    field, debug_info = self._fetch_and_regrid(dataset_id, variable_id, init_str, lead_hour, type_id=type_id)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/fuhrer/Desktop/geospatial/weather_data.py", line 906, in _fetch_and_regrid
+    return self._fetch_control_field(ogd_api, cfg.ogd_collection, variable_id, variable, reference_iso, lead_hour)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/fuhrer/Desktop/geospatial/weather_data.py", line 997, in _fetch_control_field
+    field, units, display_offset, info = self._fetch_direct_regridded(
+                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/fuhrer/Desktop/geospatial/weather_data.py", line 1137, in _fetch_direct_regridded
+    raise OGDRequestError(
+weather_data.OGDRequestError: OGD fetch failed for variable=SNOW ref=2026-02-25T15:00:00Z lead=1 after 3 attempts: list index out of range
+2026-02-25 20:49:35,201 ERROR [icon_forecast.weather_data] Background field fetch failed key=('icon-ch1-eps-control', 'control', 'snow', '2026022515', 0)
+Traceback (most recent call last):
+  File "/Users/fuhrer/Desktop/geospatial/weather_data.py", line 1116, in _fetch_direct_regridded
+    data_array = ogd_api.get_from_ogd(request)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/fuhrer/Desktop/geospatial/.venv/lib/python3.11/site-packages/meteodatalab/ogd_api.py", line 334, in get_from_ogd
+    return grib_decoder.load(
+           ^^^^^^^^^^^^^^^^^^
+  File "/Users/fuhrer/Desktop/geospatial/.venv/lib/python3.11/site-packages/meteodatalab/grib_decoder.py", line 299, in load
+    buffer_map = _load_buffer_map(source, request, geo_coords=geo_coords)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/fuhrer/Desktop/geospatial/.venv/lib/python3.11/site-packages/meteodatalab/grib_decoder.py", line 218, in _load_buffer_map
+    for field in fs:
+  File "/Users/fuhrer/Desktop/geospatial/.venv/lib/python3.11/site-packages/meteodatalab/data_source.py", line 103, in _
+    yield from self._retrieve(request)
+  File "/Users/fuhrer/Desktop/geospatial/.venv/lib/python3.11/site-packages/meteodatalab/data_source.py", line 175, in _retrieve
+    fs = ekd.from_source("url", self.urls)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/fuhrer/Desktop/geospatial/.venv/lib/python3.11/site-packages/earthkit/data/sources/__init__.py", line 142, in from_source
+    src = get_source(name, *args, **kwargs)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/fuhrer/Desktop/geospatial/.venv/lib/python3.11/site-packages/earthkit/data/sources/__init__.py", line 123, in __call__
+    source = klass(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/fuhrer/Desktop/geospatial/.venv/lib/python3.11/site-packages/earthkit/data/core/__init__.py", line 22, in __call__
+    obj.__init__(*args, **kwargs)
+  File "/Users/fuhrer/Desktop/geospatial/.venv/lib/python3.11/site-packages/earthkit/data/sources/url.py", line 267, in __init__
+    self._download()
+  File "/Users/fuhrer/Desktop/geospatial/.venv/lib/python3.11/site-packages/earthkit/data/sources/url.py", line 308, in _download
+    **self.url_spec[0].kwargs,
+      ~~~~~~~~~~~~~^^^
+  File "/Users/fuhrer/Desktop/geospatial/.venv/lib/python3.11/site-packages/earthkit/data/utils/url.py", line 82, in __getitem__
+    return self.spec[n]
+           ~~~~~~~~~^^^
+IndexError: list index out of range
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/Users/fuhrer/Desktop/geospatial/weather_data.py", line 343, in _background_fetch_job
+    self.get_field(dataset_id, variable_id, init_str, int(lead_hour), type_id=str(type_id))
+  File "/Users/fuhrer/Desktop/geospatial/weather_data.py", line 551, in get_field
+    field, debug_info = self._fetch_and_regrid(dataset_id, variable_id, init_str, lead_hour, type_id=type_id)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/fuhrer/Desktop/geospatial/weather_data.py", line 906, in _fetch_and_regrid
+    return self._fetch_control_field(ogd_api, cfg.ogd_collection, variable_id, variable, reference_iso, lead_hour)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/fuhrer/Desktop/geospatial/weather_data.py", line 997, in _fetch_control_field
+    field, units, display_offset, info = self._fetch_direct_regridded(
+                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/fuhrer/Desktop/geospatial/weather_data.py", line 1137, in _fetch_direct_regridded
+    raise OGDRequestError(
+weather_data.OGDRequestError: OGD fetch failed for variable=SNOW ref=2026-02-25T15:00:00Z lead=0 after 3 attempts: list index out of range
+2026-02-25 20:49:36,696 WARNING [icon_forecast] Tile request runtime error: OGD fetch failed for variable=SNOW ref=2026-02-25T15:00:00Z lead=0 after 3 attempts: list index out of range
+2026-02-25 20:49:36,700 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=snow init=2026022515 lead=0 z=8 x=134 y=91
+2026-02-25 20:49:38,531 WARNING [icon_forecast] Tile request runtime error: OGD fetch failed for variable=SNOW ref=2026-02-25T15:00:00Z lead=0 after 3 attempts: list index out of range
+2026-02-25 20:49:38,536 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=snow init=2026022515 lead=0 z=8 x=132 y=89
+2026-02-25 20:49:40,158 WARNING [icon_forecast] Tile request runtime error: OGD fetch failed for variable=SNOW ref=2026-02-25T15:00:00Z lead=0 after 3 attempts: list index out of range
+2026-02-25 20:49:40,162 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=snow init=2026022515 lead=0 z=8 x=135 y=90
+2026-02-25 20:49:42,014 WARNING [icon_forecast] Tile request runtime error: OGD fetch failed for variable=SNOW ref=2026-02-25T15:00:00Z lead=0 after 3 attempts: list index out of range
+2026-02-25 20:53:18,358 INFO [icon_forecast] Logger configured level=INFO file=logs/icon_forecast.log
+2026-02-25 20:53:18,483 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=t_2m init=2026022500 lead=0 z=7 x=67 y=45
+2026-02-25 20:53:18,565 WARNING [icon_forecast.weather_data] Dropped corrupt/incomplete field cache file path=cache/fields/v4_icon-ch1-eps-control_control_t_2m_u1_2026022518_000.npz
+2026-02-25 21:30:49,529 INFO [icon_forecast] Logger configured level=DEBUG file=logs/icon_forecast.log
+2026-02-25 21:30:49,579 INFO [icon_forecast] App startup
+2026-02-25 21:30:49,580 INFO [icon_forecast.weather_data] Started hot prewarm thread
+2026-02-25 21:30:51,623 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=snow init=2026022515 lead=0 z=8 x=134 y=89
+2026-02-25 21:30:51,625 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=snow init=2026022515 lead=0 z=8 x=133 y=91
+2026-02-25 21:30:51,899 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=snow init=2026022515 lead=0 z=8 x=132 y=90
+2026-02-25 21:30:51,953 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=snow init=2026022515 lead=0 z=8 x=134 y=91
+2026-02-25 21:30:51,953 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=snow init=2026022515 lead=0 z=8 x=132 y=89
+2026-02-25 21:30:52,087 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:30:52,107 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=snow init=2026022515 lead=0 z=8 x=132 y=89
+2026-02-25 21:30:55,985 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v4_icon-ch1-eps-control_control_t_2m_u1_2026022518_000.npz bytes=596305
+2026-02-25 21:30:57,145 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v4_icon-ch1-eps-control_control_t_2m_u1_2026022518_006.npz bytes=595628
+2026-02-25 21:30:58,196 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v4_icon-ch1-eps-control_control_t_2m_u1_2026022518_012.npz bytes=600410
+2026-02-25 21:30:58,951 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v4_icon-ch1-eps-control_control_tot_prec_u1_2026022518_000.npz bytes=1033
+2026-02-25 21:30:59,132 WARNING [icon_forecast] Tile request runtime error: OGD fetch failed for variable=SNOW ref=2026-02-25T15:00:00Z lead=0 after horizon fallbacks (0, 1, 2, 3) and 3 attempts each: No OGD assets for variable=SNOW ref=2026-02-25T15:00:00Z lead=3
+2026-02-25 21:30:59,137 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=snow init=2026022515 lead=0 z=8 x=134 y=91
+2026-02-25 21:31:00,463 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v4_icon-ch1-eps-control_control_tot_prec_u1_2026022518_006.npz bytes=31318
+2026-02-25 21:31:01,497 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v4_icon-ch1-eps-control_control_tot_prec_u1_2026022518_012.npz bytes=63900
+2026-02-25 21:31:04,977 WARNING [icon_forecast] Tile request runtime error: OGD fetch failed for variable=SNOW ref=2026-02-25T15:00:00Z lead=0 after horizon fallbacks (0, 1, 2, 3) and 3 attempts each: No OGD assets for variable=SNOW ref=2026-02-25T15:00:00Z lead=3
+2026-02-25 21:31:04,982 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=snow init=2026022515 lead=0 z=8 x=135 y=89
+2026-02-25 21:31:10,872 WARNING [icon_forecast] Tile request runtime error: OGD fetch failed for variable=SNOW ref=2026-02-25T15:00:00Z lead=0 after horizon fallbacks (0, 1, 2, 3) and 3 attempts each: No OGD assets for variable=SNOW ref=2026-02-25T15:00:00Z lead=3
+2026-02-25 21:31:10,880 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=snow init=2026022515 lead=0 z=8 x=133 y=90
+2026-02-25 21:31:16,686 WARNING [icon_forecast] Tile request runtime error: OGD fetch failed for variable=SNOW ref=2026-02-25T15:00:00Z lead=0 after horizon fallbacks (0, 1, 2, 3) and 3 attempts each: No OGD assets for variable=SNOW ref=2026-02-25T15:00:00Z lead=3
+2026-02-25 21:31:16,696 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=snow init=2026022515 lead=0 z=8 x=133 y=91
+2026-02-25 21:31:22,796 WARNING [icon_forecast] Tile request runtime error: OGD fetch failed for variable=SNOW ref=2026-02-25T15:00:00Z lead=0 after horizon fallbacks (0, 1, 2, 3) and 3 attempts each: No OGD assets for variable=SNOW ref=2026-02-25T15:00:00Z lead=3
+2026-02-25 21:31:22,799 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=snow init=2026022515 lead=0 z=8 x=132 y=90
+2026-02-25 21:31:28,728 WARNING [icon_forecast] Tile request runtime error: OGD fetch failed for variable=SNOW ref=2026-02-25T15:00:00Z lead=0 after horizon fallbacks (0, 1, 2, 3) and 3 attempts each: No OGD assets for variable=SNOW ref=2026-02-25T15:00:00Z lead=3
+2026-02-25 21:31:28,734 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=alhfl_s init=2026022518 lead=0 z=8 x=133 y=90
+2026-02-25 21:31:29,660 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v4_icon-ch1-eps-control_control_alhfl_s_u1_2026022518_000.npz bytes=1033
+2026-02-25 21:31:29,762 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:31:34,653 WARNING [icon_forecast] Tile request runtime error: OGD fetch failed for variable=SNOW ref=2026-02-25T15:00:00Z lead=0 after horizon fallbacks (0, 1, 2, 3) and 3 attempts each: No OGD assets for variable=SNOW ref=2026-02-25T15:00:00Z lead=3
+2026-02-25 21:31:40,534 WARNING [icon_forecast] Tile request runtime error: OGD fetch failed for variable=SNOW ref=2026-02-25T15:00:00Z lead=0 after horizon fallbacks (0, 1, 2, 3) and 3 attempts each: No OGD assets for variable=SNOW ref=2026-02-25T15:00:00Z lead=3
+2026-02-25 21:31:47,105 WARNING [icon_forecast] Tile request runtime error: OGD fetch failed for variable=SNOW ref=2026-02-25T15:00:00Z lead=0 after horizon fallbacks (0, 1, 2, 3) and 3 attempts each: No OGD assets for variable=SNOW ref=2026-02-25T15:00:00Z lead=3
+2026-02-25 21:31:49,051 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:31:49,776 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:31:52,982 WARNING [icon_forecast] Tile request runtime error: OGD fetch failed for variable=SNOW ref=2026-02-25T15:00:00Z lead=0 after horizon fallbacks (0, 1, 2, 3) and 3 attempts each: No OGD assets for variable=SNOW ref=2026-02-25T15:00:00Z lead=3
+2026-02-25 21:31:59,010 WARNING [icon_forecast] Tile request runtime error: OGD fetch failed for variable=SNOW ref=2026-02-25T15:00:00Z lead=0 after horizon fallbacks (0, 1, 2, 3) and 3 attempts each: No OGD assets for variable=SNOW ref=2026-02-25T15:00:00Z lead=3
+2026-02-25 21:32:09,178 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:32:09,796 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:32:29,313 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:32:29,814 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:32:49,442 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:32:49,830 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:33:09,567 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:33:09,845 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:33:29,662 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:33:29,867 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:33:49,786 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:33:49,885 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:34:09,901 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:34:09,907 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:34:29,919 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:34:30,038 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:34:49,938 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:34:50,132 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:35:09,954 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:35:10,252 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:35:29,970 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:35:30,367 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:35:49,992 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:35:50,517 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:36:10,023 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:36:10,643 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:36:30,054 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:36:30,767 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:36:50,080 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:36:50,890 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:37:10,098 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:37:11,003 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:37:30,114 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:37:31,126 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:37:50,131 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:37:51,241 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:38:10,157 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:38:11,295 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:38:30,181 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:38:31,417 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:38:50,197 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:38:51,530 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:39:10,216 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:39:30,239 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:39:50,258 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:40:10,275 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:40:30,296 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:40:50,320 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:41:10,339 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:41:30,370 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:41:50,494 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:42:10,654 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:42:30,774 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:42:50,896 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:43:11,021 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:43:31,137 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:43:51,266 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:44:11,386 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:44:31,511 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:44:51,631 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:45:11,761 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:45:31,893 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:45:52,002 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:46:12,119 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:46:32,237 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:46:52,356 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:47:12,452 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:47:32,571 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:47:52,690 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:48:12,805 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:48:32,925 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:48:52,951 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:49:12,981 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:49:33,110 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:49:53,258 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:50:13,384 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:50:33,510 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:50:53,635 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:51:13,707 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:51:33,840 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:51:53,972 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:52:14,095 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:52:34,219 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:52:54,351 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:53:14,432 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:53:34,552 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:53:54,671 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:54:14,788 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:54:34,908 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:54:55,033 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:55:15,157 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:55:35,279 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:55:55,467 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:56:15,510 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:56:16,355 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v4_icon-ch2-eps-control_control_t_2m_u1_2026022518_000.npz bytes=292075
+2026-02-25 21:56:17,114 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v4_icon-ch2-eps-control_control_t_2m_u1_2026022518_006.npz bytes=294225
+2026-02-25 21:56:17,938 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v4_icon-ch2-eps-control_control_t_2m_u1_2026022518_012.npz bytes=294649
+2026-02-25 21:56:18,542 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v4_icon-ch2-eps-control_control_tot_prec_u1_2026022518_000.npz bytes=1033
+2026-02-25 21:56:19,278 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v4_icon-ch2-eps-control_control_tot_prec_u1_2026022518_006.npz bytes=12499
+2026-02-25 21:56:20,026 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v4_icon-ch2-eps-control_control_tot_prec_u1_2026022518_012.npz bytes=19847
+2026-02-25 21:56:35,581 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:56:55,706 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 21:57:15,829 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 22:03:29,779 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 22:03:42,149 INFO [icon_forecast] App shutdown
+2026-02-25 22:03:42,149 INFO [icon_forecast.weather_data] Stopped background workers
+2026-02-25 22:03:44,778 INFO [icon_forecast] Logger configured level=DEBUG file=logs/icon_forecast.log
+2026-02-25 22:03:44,810 INFO [icon_forecast] App startup
+2026-02-25 22:03:44,810 INFO [icon_forecast.weather_data] Started hot prewarm thread
+2026-02-25 22:03:47,613 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 22:03:47,729 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch1-eps-control', 'control', 'alhfl_s', '2026022518', 1)
+2026-02-25 22:03:47,750 DEBUG [icon_forecast] Prefetch request dataset=icon-ch1-eps-control type=control var=alhfl_s init=2026022518 lead=1 queued=True
+2026-02-25 22:03:50,023 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 22:03:50,043 DEBUG [icon_forecast] Field debug cache miss dataset=icon-ch1-eps-control type=control var=snow init=2026022515 lead=0
+2026-02-25 22:03:50,044 DEBUG [icon_forecast] Value cache miss dataset=icon-ch1-eps-control type=control var=snow init=2026022515 lead=0 queued=False
+2026-02-25 22:03:50,048 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=snow init=2026022515 lead=0 z=8 x=134 y=90
+2026-02-25 22:03:50,048 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch1-eps-control', 'control', 'snow', '2026022515', 0)
+2026-02-25 22:03:50,049 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=snow init=2026022515 lead=0 z=8 x=133 y=90
+2026-02-25 22:03:50,050 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=snow init=2026022515 lead=0 z=8 x=134 y=89
+2026-02-25 22:03:50,050 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=snow init=2026022515 lead=0 z=8 x=133 y=89
+2026-02-25 22:03:50,051 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=snow init=2026022515 lead=0 z=8 x=133 y=91
+2026-02-25 22:03:50,057 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=snow init=2026022515 lead=0 z=8 x=132 y=90
+2026-02-25 22:03:51,171 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v4_icon-ch1-eps-control_control_alhfl_s_u1_2026022518_001.npz bytes=573083
+2026-02-25 22:03:55,926 ERROR [icon_forecast.weather_data] Background field fetch failed key=('icon-ch1-eps-control', 'control', 'snow', '2026022515', 0)
+Traceback (most recent call last):
+  File "/Users/fuhrer/Desktop/geospatial/weather_data.py", line 1257, in _fetch_direct_regridded
+    raise OGDRequestError(
+weather_data.OGDRequestError: No OGD assets for variable=SNOW ref=2026-02-25T15:00:00Z lead=3
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/Users/fuhrer/Desktop/geospatial/weather_data.py", line 480, in _background_fetch_job
+    self.get_field(dataset_id, variable_id, init_str, int(lead_hour), type_id=str(type_id))
+  File "/Users/fuhrer/Desktop/geospatial/weather_data.py", line 688, in get_field
+    field, debug_info = self._fetch_and_regrid(dataset_id, variable_id, init_str, lead_hour, type_id=type_id)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/fuhrer/Desktop/geospatial/weather_data.py", line 1043, in _fetch_and_regrid
+    return self._fetch_control_field(ogd_api, cfg.ogd_collection, variable_id, variable, reference_iso, lead_hour)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/fuhrer/Desktop/geospatial/weather_data.py", line 1134, in _fetch_control_field
+    field, units, display_offset, info = self._fetch_direct_regridded(
+                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/fuhrer/Desktop/geospatial/weather_data.py", line 1282, in _fetch_direct_regridded
+    raise OGDRequestError(
+weather_data.OGDRequestError: OGD fetch failed for variable=SNOW ref=2026-02-25T15:00:00Z lead=0 after horizon fallbacks (0, 1, 2, 3) and 3 attempts each: No OGD assets for variable=SNOW ref=2026-02-25T15:00:00Z lead=3
+2026-02-25 22:03:56,431 DEBUG [icon_forecast] Field debug cache miss dataset=icon-ch1-eps-control type=control var=clcm init=2026022518 lead=0
+2026-02-25 22:03:56,433 DEBUG [icon_forecast] Field debug cache miss dataset=icon-ch1-eps-control type=control var=clcm init=2026022518 lead=0
+2026-02-25 22:03:56,433 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch1-eps-control', 'control', 'clcm', '2026022518', 0)
+2026-02-25 22:03:56,434 DEBUG [icon_forecast] Value cache miss dataset=icon-ch1-eps-control type=control var=clcm init=2026022518 lead=0 queued=False
+2026-02-25 22:03:56,439 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch1-eps-control', 'control', 'clcm', '2026022518', 1)
+2026-02-25 22:03:56,440 DEBUG [icon_forecast] Prefetch request dataset=icon-ch1-eps-control type=control var=clcm init=2026022518 lead=1 queued=True
+2026-02-25 22:03:56,467 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=clcm init=2026022518 lead=0 z=8 x=133 y=90
+2026-02-25 22:03:56,468 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=clcm init=2026022518 lead=0 z=8 x=134 y=90
+2026-02-25 22:03:56,469 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=clcm init=2026022518 lead=0 z=8 x=133 y=89
+2026-02-25 22:03:56,470 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=clcm init=2026022518 lead=0 z=8 x=134 y=89
+2026-02-25 22:03:56,473 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=clcm init=2026022518 lead=0 z=8 x=133 y=91
+2026-02-25 22:03:56,473 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=clcm init=2026022518 lead=0 z=8 x=132 y=90
+2026-02-25 22:03:57,499 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v4_icon-ch1-eps-control_control_clcm_u1_2026022518_000.npz bytes=21158
+2026-02-25 22:03:57,603 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v4_icon-ch1-eps-control_control_clcm_u1_2026022518_001.npz bytes=15025
+2026-02-25 22:04:01,655 WARNING [icon_forecast] Tile request runtime error: OGD fetch failed for variable=SNOW ref=2026-02-25T15:00:00Z lead=0 after horizon fallbacks (0, 1, 2, 3) and 3 attempts each: No OGD assets for variable=SNOW ref=2026-02-25T15:00:00Z lead=3
+2026-02-25 22:04:04,488 DEBUG [icon_forecast] Field debug cache miss dataset=icon-ch1-eps-control type=control var=td_2m init=2026022518 lead=0
+2026-02-25 22:04:04,490 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch1-eps-control', 'control', 'td_2m', '2026022518', 0)
+2026-02-25 22:04:04,492 DEBUG [icon_forecast] Field debug cache miss dataset=icon-ch1-eps-control type=control var=td_2m init=2026022518 lead=0
+2026-02-25 22:04:04,492 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch1-eps-control', 'control', 'td_2m', '2026022518', 1)
+2026-02-25 22:04:04,492 DEBUG [icon_forecast] Value cache miss dataset=icon-ch1-eps-control type=control var=td_2m init=2026022518 lead=0 queued=False
+2026-02-25 22:04:04,494 DEBUG [icon_forecast] Prefetch request dataset=icon-ch1-eps-control type=control var=td_2m init=2026022518 lead=1 queued=True
+2026-02-25 22:04:04,517 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=td_2m init=2026022518 lead=0 z=8 x=133 y=90
+2026-02-25 22:04:04,518 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=td_2m init=2026022518 lead=0 z=8 x=134 y=90
+2026-02-25 22:04:04,518 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=td_2m init=2026022518 lead=0 z=8 x=133 y=89
+2026-02-25 22:04:04,518 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=td_2m init=2026022518 lead=0 z=8 x=134 y=89
+2026-02-25 22:04:04,520 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=td_2m init=2026022518 lead=0 z=8 x=133 y=91
+2026-02-25 22:04:04,520 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=td_2m init=2026022518 lead=0 z=8 x=132 y=90
+2026-02-25 22:04:05,672 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v4_icon-ch1-eps-control_control_td_2m_u1_2026022518_001.npz bytes=607740
+2026-02-25 22:04:05,711 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v4_icon-ch1-eps-control_control_td_2m_u1_2026022518_000.npz bytes=602307
+2026-02-25 22:04:07,371 WARNING [icon_forecast] Tile request runtime error: OGD fetch failed for variable=SNOW ref=2026-02-25T15:00:00Z lead=0 after horizon fallbacks (0, 1, 2, 3) and 3 attempts each: No OGD assets for variable=SNOW ref=2026-02-25T15:00:00Z lead=3
+2026-02-25 22:04:07,650 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-25 22:04:13,561 WARNING [icon_forecast] Tile request runtime error: OGD fetch failed for variable=SNOW ref=2026-02-25T15:00:00Z lead=0 after horizon fallbacks (0, 1, 2, 3) and 3 attempts each: No OGD assets for variable=SNOW ref=2026-02-25T15:00:00Z lead=3
+2026-02-25 22:04:14,616 DEBUG [icon_forecast] Field debug cache miss dataset=icon-ch1-eps-control type=control var=snow init=2026022518 lead=0
+2026-02-25 22:04:14,617 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch1-eps-control', 'control', 'snow', '2026022518', 0)
+2026-02-25 22:04:14,618 DEBUG [icon_forecast] Field debug cache miss dataset=icon-ch1-eps-control type=control var=snow init=2026022518 lead=0
+2026-02-25 22:04:14,618 DEBUG [icon_forecast] Value cache miss dataset=icon-ch1-eps-control type=control var=snow init=2026022518 lead=0 queued=False
+2026-02-25 22:04:14,619 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch1-eps-control', 'control', 'snow', '2026022518', 1)
+2026-02-25 22:04:14,620 DEBUG [icon_forecast] Prefetch request dataset=icon-ch1-eps-control type=control var=snow init=2026022518 lead=1 queued=True
+2026-02-25 22:04:14,639 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=snow init=2026022518 lead=0 z=8 x=133 y=90
+2026-02-25 22:04:14,639 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=snow init=2026022518 lead=0 z=8 x=134 y=90
+2026-02-25 22:04:14,639 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=snow init=2026022518 lead=0 z=8 x=133 y=89
+2026-02-25 22:04:14,639 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=snow init=2026022518 lead=0 z=8 x=134 y=89
+2026-02-25 22:04:14,641 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=snow init=2026022518 lead=0 z=8 x=133 y=91
+2026-02-25 22:04:14,641 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=snow init=2026022518 lead=0 z=8 x=132 y=90
+2026-02-25 22:04:19,360 WARNING [icon_forecast] Tile request runtime error: OGD fetch failed for variable=SNOW ref=2026-02-25T15:00:00Z lead=0 after horizon fallbacks (0, 1, 2, 3) and 3 attempts each: No OGD assets for variable=SNOW ref=2026-02-25T15:00:00Z lead=3
+2026-02-25 22:04:20,319 ERROR [icon_forecast.weather_data] Background field fetch failed key=('icon-ch1-eps-control', 'control', 'snow', '2026022518', 0)
+Traceback (most recent call last):
+  File "/Users/fuhrer/Desktop/geospatial/weather_data.py", line 1257, in _fetch_direct_regridded
+    raise OGDRequestError(
+weather_data.OGDRequestError: No OGD assets for variable=SNOW ref=2026-02-25T18:00:00Z lead=3
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/Users/fuhrer/Desktop/geospatial/weather_data.py", line 480, in _background_fetch_job
+    self.get_field(dataset_id, variable_id, init_str, int(lead_hour), type_id=str(type_id))
+  File "/Users/fuhrer/Desktop/geospatial/weather_data.py", line 688, in get_field
+    field, debug_info = self._fetch_and_regrid(dataset_id, variable_id, init_str, lead_hour, type_id=type_id)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/fuhrer/Desktop/geospatial/weather_data.py", line 1043, in _fetch_and_regrid
+    return self._fetch_control_field(ogd_api, cfg.ogd_collection, variable_id, variable, reference_iso, lead_hour)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/fuhrer/Desktop/geospatial/weather_data.py", line 1134, in _fetch_control_field
+    field, units, display_offset, info = self._fetch_direct_regridded(
+                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/fuhrer/Desktop/geospatial/weather_data.py", line 1282, in _fetch_direct_regridded
+    raise OGDRequestError(
+weather_data.OGDRequestError: OGD fetch failed for variable=SNOW ref=2026-02-25T18:00:00Z lead=0 after horizon fallbacks (0, 1, 2, 3) and 3 attempts each: No OGD assets for variable=SNOW ref=2026-02-25T18:00:00Z lead=3
+2026-02-25 22:04:20,504 ERROR [icon_forecast.weather_data] Background field fetch failed key=('icon-ch1-eps-control', 'control', 'snow', '2026022518', 1)
+Traceback (most recent call last):
+  File "/Users/fuhrer/Desktop/geospatial/weather_data.py", line 1257, in _fetch_direct_regridded
+    raise OGDRequestError(
+weather_data.OGDRequestError: No OGD assets for variable=SNOW ref=2026-02-25T18:00:00Z lead=4
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/Users/fuhrer/Desktop/geospatial/weather_data.py", line 480, in _background_fetch_job
+    self.get_field(dataset_id, variable_id, init_str, int(lead_hour), type_id=str(type_id))
+  File "/Users/fuhrer/Desktop/geospatial/weather_data.py", line 688, in get_field
+    field, debug_info = self._fetch_and_regrid(dataset_id, variable_id, init_str, lead_hour, type_id=type_id)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/fuhrer/Desktop/geospatial/weather_data.py", line 1043, in _fetch_and_regrid
+    return self._fetch_control_field(ogd_api, cfg.ogd_collection, variable_id, variable, reference_iso, lead_hour)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/fuhrer/Desktop/geospatial/weather_data.py", line 1134, in _fetch_control_field
+    field, units, display_offset, info = self._fetch_direct_regridded(
+                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/fuhrer/Desktop/geospatial/weather_data.py", line 1282, in _fetch_direct_regridded
+    raise OGDRequestError(
+weather_data.OGDRequestError: OGD fetch failed for variable=SNOW ref=2026-02-25T18:00:00Z lead=1 after horizon fallbacks (0, 1, 2, 3) and 3 attempts each: No OGD assets for variable=SNOW ref=2026-02-25T18:00:00Z lead=4
+2026-02-25 22:04:25,088 WARNING [icon_forecast] Tile request runtime error: OGD fetch failed for variable=SNOW ref=2026-02-25T15:00:00Z lead=0 after horizon fallbacks (0, 1, 2, 3) and 3 attempts each: No OGD assets for variable=SNOW ref=2026-02-25T15:00:00Z lead=3
+2026-02-25 22:04:26,105 WARNING [icon_forecast] Tile request runtime error: OGD fetch failed for variable=SNOW ref=2026-02-25T18:00:00Z lead=0 after horizon fallbacks (0, 1, 2, 3) and 3 attempts each: No OGD assets for variable=SNOW ref=2026-02-25T18:00:00Z lead=3
+2026-02-25 22:04:26,122 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=snow init=2026022518 lead=0 z=8 x=134 y=91
+2026-02-25 22:04:26,204 DEBUG [icon_forecast] Field debug cache miss dataset=icon-ch1-eps-control type=control var=relhum_2m init=2026022518 lead=0
+2026-02-25 22:04:26,204 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch1-eps-control', 'control', 'relhum_2m', '2026022518', 0)
+2026-02-25 22:04:26,206 DEBUG [icon_forecast] Field debug cache miss dataset=icon-ch1-eps-control type=control var=relhum_2m init=2026022518 lead=0
+2026-02-25 22:04:26,208 DEBUG [icon_forecast] Value cache miss dataset=icon-ch1-eps-control type=control var=relhum_2m init=2026022518 lead=0 queued=False
+2026-02-25 22:04:26,209 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch1-eps-control', 'control', 'relhum_2m', '2026022518', 1)
+2026-02-25 22:04:26,209 DEBUG [icon_forecast] Prefetch request dataset=icon-ch1-eps-control type=control var=relhum_2m init=2026022518 lead=1 queued=True
+2026-02-25 22:04:26,232 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=relhum_2m init=2026022518 lead=0 z=8 x=133 y=90
+2026-02-25 22:04:26,237 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=relhum_2m init=2026022518 lead=0 z=8 x=134 y=90
+2026-02-25 22:04:26,237 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=relhum_2m init=2026022518 lead=0 z=8 x=133 y=89
+2026-02-25 22:04:26,237 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=relhum_2m init=2026022518 lead=0 z=8 x=134 y=89
+2026-02-25 22:04:26,237 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=relhum_2m init=2026022518 lead=0 z=8 x=132 y=90
+2026-02-25 22:04:26,238 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=relhum_2m init=2026022518 lead=0 z=8 x=133 y=91
+2026-02-25 22:04:30,804 WARNING [icon_forecast] Tile request runtime error: OGD fetch failed for variable=SNOW ref=2026-02-25T15:00:00Z lead=0 after horizon fallbacks (0, 1, 2, 3) and 3 attempts each: No OGD assets for variable=SNOW ref=2026-02-25T15:00:00Z lead=3
+2026-02-25 22:04:31,868 WARNING [icon_forecast] Tile request runtime error: OGD fetch failed for variable=SNOW ref=2026-02-25T18:00:00Z lead=0 after horizon fallbacks (0, 1, 2, 3) and 3 attempts each: No OGD assets for variable=SNOW ref=2026-02-25T18:00:00Z lead=3
+2026-02-25 22:04:31,986 ERROR [icon_forecast.weather_data] Background field fetch failed key=('icon-ch1-eps-control', 'control', 'relhum_2m', '2026022518', 0)
+Traceback (most recent call last):
+  File "/Users/fuhrer/Desktop/geospatial/weather_data.py", line 1257, in _fetch_direct_regridded
+    raise OGDRequestError(
+weather_data.OGDRequestError: No OGD assets for variable=RELHUM_2M ref=2026-02-25T18:00:00Z lead=3
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/Users/fuhrer/Desktop/geospatial/weather_data.py", line 480, in _background_fetch_job
+    self.get_field(dataset_id, variable_id, init_str, int(lead_hour), type_id=str(type_id))
+  File "/Users/fuhrer/Desktop/geospatial/weather_data.py", line 688, in get_field
+    field, debug_info = self._fetch_and_regrid(dataset_id, variable_id, init_str, lead_hour, type_id=type_id)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/fuhrer/Desktop/geospatial/weather_data.py", line 1043, in _fetch_and_regrid
+    return self._fetch_control_field(ogd_api, cfg.ogd_collection, variable_id, variable, reference_iso, lead_hour)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/fuhrer/Desktop/geospatial/weather_data.py", line 1134, in _fetch_control_field
+    field, units, display_offset, info = self._fetch_direct_regridded(
+                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/fuhrer/Desktop/geospatial/weather_data.py", line 1282, in _fetch_direct_regridded
+    raise OGDRequestError(
+weather_data.OGDRequestError: OGD fetch failed for variable=RELHUM_2M ref=2026-02-25T18:00:00Z lead=0 after horizon fallbacks (0, 1, 2, 3) and 3 attempts each: No OGD assets for variable=RELHUM_2M ref=2026-02-25T18:00:00Z lead=3
+2026-02-25 22:04:32,008 ERROR [icon_forecast.weather_data] Background field fetch failed key=('icon-ch1-eps-control', 'control', 'relhum_2m', '2026022518', 1)
+Traceback (most recent call last):
+  File "/Users/fuhrer/Desktop/geospatial/weather_data.py", line 1257, in _fetch_direct_regridded
+    raise OGDRequestError(
+weather_data.OGDRequestError: No OGD assets for variable=RELHUM_2M ref=2026-02-25T18:00:00Z lead=4
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/Users/fuhrer/Desktop/geospatial/weather_data.py", line 480, in _background_fetch_job
+    self.get_field(dataset_id, variable_id, init_str, int(lead_hour), type_id=str(type_id))
+  File "/Users/fuhrer/Desktop/geospatial/weather_data.py", line 688, in get_field
+    field, debug_info = self._fetch_and_regrid(dataset_id, variable_id, init_str, lead_hour, type_id=type_id)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/fuhrer/Desktop/geospatial/weather_data.py", line 1043, in _fetch_and_regrid
+    return self._fetch_control_field(ogd_api, cfg.ogd_collection, variable_id, variable, reference_iso, lead_hour)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/fuhrer/Desktop/geospatial/weather_data.py", line 1134, in _fetch_control_field
+    field, units, display_offset, info = self._fetch_direct_regridded(
+                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/fuhrer/Desktop/geospatial/weather_data.py", line 1282, in _fetch_direct_regridded
+    raise OGDRequestError(
+weather_data.OGDRequestError: OGD fetch failed for variable=RELHUM_2M ref=2026-02-25T18:00:00Z lead=1 after horizon fallbacks (0, 1, 2, 3) and 3 attempts each: No OGD assets for variable=RELHUM_2M ref=2026-02-25T18:00:00Z lead=4
+2026-02-25 22:04:37,621 WARNING [icon_forecast] Tile request runtime error: OGD fetch failed for variable=SNOW ref=2026-02-25T18:00:00Z lead=0 after horizon fallbacks (0, 1, 2, 3) and 3 attempts each: No OGD assets for variable=SNOW ref=2026-02-25T18:00:00Z lead=3
+2026-02-25 22:04:37,716 WARNING [icon_forecast] Tile request runtime error: OGD fetch failed for variable=RELHUM_2M ref=2026-02-25T18:00:00Z lead=0 after horizon fallbacks (0, 1, 2, 3) and 3 attempts each: No OGD assets for variable=RELHUM_2M ref=2026-02-25T18:00:00Z lead=3
+2026-02-25 22:04:37,720 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=relhum_2m init=2026022518 lead=0 z=8 x=134 y=91
+2026-02-25 22:04:37,738 DEBUG [icon_forecast] Field debug cache miss dataset=icon-ch1-eps-control type=control var=rain_gsp init=2026022518 lead=0
+2026-02-25 22:04:37,738 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch1-eps-control', 'control', 'rain_gsp', '2026022518', 0)
+2026-02-25 22:04:37,740 DEBUG [icon_forecast] Field debug cache miss dataset=icon-ch1-eps-control type=control var=rain_gsp init=2026022518 lead=0
+2026-02-25 22:04:37,741 DEBUG [icon_forecast] Value cache miss dataset=icon-ch1-eps-control type=control var=rain_gsp init=2026022518 lead=0 queued=False
+2026-02-25 22:04:37,743 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch1-eps-control', 'control', 'rain_gsp', '2026022518', 1)
+2026-02-25 22:04:37,743 DEBUG [icon_forecast] Prefetch request dataset=icon-ch1-eps-control type=control var=rain_gsp init=2026022518 lead=1 queued=True
+2026-02-25 22:04:37,748 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=rain_gsp init=2026022518 lead=0 z=8 x=133 y=90
+2026-02-25 22:04:37,753 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=rain_gsp init=2026022518 lead=0 z=8 x=134 y=90
+2026-02-25 22:04:37,753 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=rain_gsp init=2026022518 lead=0 z=8 x=133 y=89
+2026-02-25 22:04:37,753 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=rain_gsp init=2026022518 lead=0 z=8 x=134 y=89
+2026-02-25 22:04:37,753 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=rain_gsp init=2026022518 lead=0 z=8 x=133 y=91
+2026-02-25 22:04:37,754 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=control var=rain_gsp init=2026022518 lead=0 z=8 x=132 y=90
+2026-02-25 22:04:38,546 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v4_icon-ch1-eps-control_control_rain_gsp_u1_2026022518_000.npz bytes=1033
+2026-02-25 22:04:38,728 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v4_icon-ch1-eps-control_control_rain_gsp_u1_2026022518_001.npz bytes=3021
+2026-02-25 22:04:43,484 WARNING [icon_forecast] Tile request runtime error: OGD fetch failed for variable=RELHUM_2M ref=2026-02-25T18:00:00Z lead=0 after horizon fallbacks (0, 1, 2, 3) and 3 attempts each: No OGD assets for variable=RELHUM_2M ref=2026-02-25T18:00:00Z lead=3
+2026-02-25 22:04:43,509 WARNING [icon_forecast] Tile request runtime error: OGD fetch failed for variable=SNOW ref=2026-02-25T18:00:00Z lead=0 after horizon fallbacks (0, 1, 2, 3) and 3 attempts each: No OGD assets for variable=SNOW ref=2026-02-25T18:00:00Z lead=3
+2026-02-25 22:04:49,261 WARNING [icon_forecast] Tile request runtime error: OGD fetch failed for variable=RELHUM_2M ref=2026-02-25T18:00:00Z lead=0 after horizon fallbacks (0, 1, 2, 3) and 3 attempts each: No OGD assets for variable=RELHUM_2M ref=2026-02-25T18:00:00Z lead=3
+2026-02-25 22:04:49,330 WARNING [icon_forecast] Tile request runtime error: OGD fetch failed for variable=SNOW ref=2026-02-25T18:00:00Z lead=0 after horizon fallbacks (0, 1, 2, 3) and 3 attempts each: No OGD assets for variable=SNOW ref=2026-02-25T18:00:00Z lead=3
+2026-02-25 22:04:54,966 WARNING [icon_forecast] Tile request runtime error: OGD fetch failed for variable=RELHUM_2M ref=2026-02-25T18:00:00Z lead=0 after horizon fallbacks (0, 1, 2, 3) and 3 attempts each: No OGD assets for variable=RELHUM_2M ref=2026-02-25T18:00:00Z lead=3
+2026-02-25 22:04:55,045 WARNING [icon_forecast] Tile request runtime error: OGD fetch failed for variable=SNOW ref=2026-02-25T18:00:00Z lead=0 after horizon fallbacks (0, 1, 2, 3) and 3 attempts each: No OGD assets for variable=SNOW ref=2026-02-25T18:00:00Z lead=3
+2026-02-25 22:05:00,733 WARNING [icon_forecast] Tile request runtime error: OGD fetch failed for variable=RELHUM_2M ref=2026-02-25T18:00:00Z lead=0 after horizon fallbacks (0, 1, 2, 3) and 3 attempts each: No OGD assets for variable=RELHUM_2M ref=2026-02-25T18:00:00Z lead=3
+2026-02-25 22:05:00,790 WARNING [icon_forecast] Tile request runtime error: OGD fetch failed for variable=SNOW ref=2026-02-25T18:00:00Z lead=0 after horizon fallbacks (0, 1, 2, 3) and 3 attempts each: No OGD assets for variable=SNOW ref=2026-02-25T18:00:00Z lead=3
+2026-02-25 22:05:07,060 WARNING [icon_forecast] Tile request runtime error: OGD fetch failed for variable=RELHUM_2M ref=2026-02-25T18:00:00Z lead=0 after horizon fallbacks (0, 1, 2, 3) and 3 attempts each: No OGD assets for variable=RELHUM_2M ref=2026-02-25T18:00:00Z lead=3
+2026-02-25 22:05:12,958 WARNING [icon_forecast] Tile request runtime error: OGD fetch failed for variable=RELHUM_2M ref=2026-02-25T18:00:00Z lead=0 after horizon fallbacks (0, 1, 2, 3) and 3 attempts each: No OGD assets for variable=RELHUM_2M ref=2026-02-25T18:00:00Z lead=3
+2026-02-25 22:33:04,444 INFO [icon_forecast] App shutdown
+2026-02-25 22:33:04,448 INFO [icon_forecast.weather_data] Stopped background workers

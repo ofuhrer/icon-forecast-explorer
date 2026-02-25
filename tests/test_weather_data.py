@@ -40,9 +40,21 @@ class WeatherDataTests(unittest.TestCase):
         cloud_percent = store._normalize_variable_units(cloud_fraction, "clct", "fraction")
         np.testing.assert_allclose(cloud_percent, np.array([[25.0]], dtype=np.float32), atol=1e-3)
 
+        relhum_fraction = np.array([[0.82]], dtype=np.float32)
+        relhum_percent = store._normalize_variable_units(relhum_fraction, "relhum_2m", "1")
+        np.testing.assert_allclose(relhum_percent, np.array([[82.0]], dtype=np.float32), atol=1e-3)
+
         sunshine_seconds = np.array([[1800.0]], dtype=np.float32)
         sunshine_minutes = store._normalize_variable_units(sunshine_seconds, "dursun", "s")
         np.testing.assert_allclose(sunshine_minutes, np.array([[30.0]], dtype=np.float32), atol=1e-3)
+
+        pressure_pa = np.array([[101325.0]], dtype=np.float32)
+        pressure_hpa = store._normalize_variable_units(pressure_pa, "pres_sfc", "Pa")
+        np.testing.assert_allclose(pressure_hpa, np.array([[1013.25]], dtype=np.float32), atol=1e-3)
+
+        rain_m = np.array([[0.003]], dtype=np.float32)
+        rain_mm = store._normalize_variable_units(rain_m, "rain_gsp", "m")
+        np.testing.assert_allclose(rain_mm, np.array([[3.0]], dtype=np.float32), atol=1e-3)
 
     def test_merge_catalogs_keeps_cached_on_regression(self):
         store = ForecastStore()

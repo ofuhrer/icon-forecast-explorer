@@ -43,6 +43,7 @@ HOT_PREWARM_LEADS = (0, 6, 12)
 HOT_PREWARM_ENABLED = os.getenv("HOT_PREWARM_ENABLED", "1").strip() == "1"
 OGD_FETCH_RETRIES = 3
 OGD_FETCH_BASE_BACKOFF_SECONDS = 0.4
+OGD_HORIZON_FALLBACK_STEPS = (0, 1, 2, 3)
 BACKGROUND_FETCH_WORKERS = int(os.getenv("BACKGROUND_FETCH_WORKERS", "2"))
 LOGGER = logging.getLogger("icon_forecast.weather_data")
 
@@ -103,6 +104,22 @@ class ForecastStore:
                 max_value=30.0,
                 ogd_variable="TD_2M",
             ),
+            "relhum_2m": VariableMeta(
+                variable_id="relhum_2m",
+                display_name="2 m relative humidity",
+                unit="%",
+                min_value=0.0,
+                max_value=100.0,
+                ogd_variable="RELHUM_2M",
+            ),
+            "pres_sfc": VariableMeta(
+                variable_id="pres_sfc",
+                display_name="Surface pressure",
+                unit="hPa",
+                min_value=960.0,
+                max_value=1040.0,
+                ogd_variable="PRES_SFC",
+            ),
             "wind_speed_10m": VariableMeta(
                 variable_id="wind_speed_10m",
                 display_name="10 m wind speed",
@@ -127,6 +144,22 @@ class ForecastStore:
                 max_value=80.0,
                 ogd_variable="TOT_PREC",
             ),
+            "rain_gsp": VariableMeta(
+                variable_id="rain_gsp",
+                display_name="Large-scale rain",
+                unit="mm",
+                min_value=0.0,
+                max_value=80.0,
+                ogd_variable="RAIN_GSP",
+            ),
+            "rain_con": VariableMeta(
+                variable_id="rain_con",
+                display_name="Convective rain",
+                unit="mm",
+                min_value=0.0,
+                max_value=80.0,
+                ogd_variable="RAIN_CON",
+            ),
             "clct": VariableMeta(
                 variable_id="clct",
                 display_name="Total cloud cover",
@@ -142,6 +175,22 @@ class ForecastStore:
                 min_value=0.0,
                 max_value=100.0,
                 ogd_variable="CLCL",
+            ),
+            "clcm": VariableMeta(
+                variable_id="clcm",
+                display_name="Mid cloud cover",
+                unit="%",
+                min_value=0.0,
+                max_value=100.0,
+                ogd_variable="CLCM",
+            ),
+            "clch": VariableMeta(
+                variable_id="clch",
+                display_name="High cloud cover",
+                unit="%",
+                min_value=0.0,
+                max_value=100.0,
+                ogd_variable="CLCH",
             ),
             "ceiling": VariableMeta(
                 variable_id="ceiling",
@@ -175,6 +224,22 @@ class ForecastStore:
                 max_value=400.0,
                 ogd_variable="SNOW",
             ),
+            "snow_gsp": VariableMeta(
+                variable_id="snow_gsp",
+                display_name="Large-scale snowfall",
+                unit="mm",
+                min_value=0.0,
+                max_value=200.0,
+                ogd_variable="SNOW_GSP",
+            ),
+            "snow_con": VariableMeta(
+                variable_id="snow_con",
+                display_name="Convective snowfall",
+                unit="mm",
+                min_value=0.0,
+                max_value=120.0,
+                ogd_variable="SNOW_CON",
+            ),
             "snowlmt": VariableMeta(
                 variable_id="snowlmt",
                 display_name="Snowfall limit",
@@ -190,6 +255,78 @@ class ForecastStore:
                 min_value=0.0,
                 max_value=60.0,
                 ogd_variable="DURSUN",
+            ),
+            "asob_s": VariableMeta(
+                variable_id="asob_s",
+                display_name="Net shortwave radiation",
+                unit="W/m^2",
+                min_value=-200.0,
+                max_value=1200.0,
+                ogd_variable="ASOB_S",
+            ),
+            "athb_s": VariableMeta(
+                variable_id="athb_s",
+                display_name="Net longwave radiation",
+                unit="W/m^2",
+                min_value=-300.0,
+                max_value=300.0,
+                ogd_variable="ATHB_S",
+            ),
+            "aswdir_s": VariableMeta(
+                variable_id="aswdir_s",
+                display_name="Direct shortwave radiation",
+                unit="W/m^2",
+                min_value=0.0,
+                max_value=1200.0,
+                ogd_variable="ASWDIR_S",
+            ),
+            "aswdifd_s": VariableMeta(
+                variable_id="aswdifd_s",
+                display_name="Diffuse shortwave radiation",
+                unit="W/m^2",
+                min_value=0.0,
+                max_value=1000.0,
+                ogd_variable="ASWDIFD_S",
+            ),
+            "ashfl_s": VariableMeta(
+                variable_id="ashfl_s",
+                display_name="Sensible heat flux",
+                unit="W/m^2",
+                min_value=-500.0,
+                max_value=500.0,
+                ogd_variable="ASHFL_S",
+            ),
+            "alhfl_s": VariableMeta(
+                variable_id="alhfl_s",
+                display_name="Latent heat flux",
+                unit="W/m^2",
+                min_value=-700.0,
+                max_value=700.0,
+                ogd_variable="ALHFL_S",
+            ),
+            "cape_ml": VariableMeta(
+                variable_id="cape_ml",
+                display_name="CAPE (mixed layer)",
+                unit="J/kg",
+                min_value=0.0,
+                max_value=4000.0,
+                ogd_variable="CAPE_ML",
+            ),
+            "cape_con": VariableMeta(
+                variable_id="cape_con",
+                display_name="CAPE (convective)",
+                unit="J/kg",
+                min_value=0.0,
+                max_value=4000.0,
+                ogd_variable="CAPE_CON",
+            ),
+            "cin_ml": VariableMeta(
+                variable_id="cin_ml",
+                display_name="CIN (mixed layer)",
+                unit="J/kg",
+                min_value=-500.0,
+                max_value=0.0,
+                ogd_variable="CIN_ML",
             ),
         }
         self._catalog_reference_ogd_variable = "T_2M"
@@ -1102,41 +1239,49 @@ class ForecastStore:
         lead_hour: int,
         perturbed: bool = False,
     ) -> Tuple[np.ndarray, str, int, Dict[str, object]]:
-        request = ogd_api.Request(
-            collection=ogd_collection,
-            variable=ogd_variable,
-            reference_datetime=reference_iso,
-            perturbed=perturbed,
-            horizon=timedelta(hours=int(lead_hour)),
-        )
+        requested_lead = int(lead_hour)
         last_exc: Exception | None = None
-        for attempt in range(1, OGD_FETCH_RETRIES + 1):
-            try:
+
+        for effective_lead in self._horizon_candidates(requested_lead):
+            request = ogd_api.Request(
+                collection=ogd_collection,
+                variable=ogd_variable,
+                reference_datetime=reference_iso,
+                perturbed=perturbed,
+                horizon=timedelta(hours=effective_lead),
+            )
+            for attempt in range(1, OGD_FETCH_RETRIES + 1):
                 try:
-                    data_array = ogd_api.get_from_ogd(request)
-                except KeyError as exc:
-                    data_array = self._load_with_decode_fallbacks(ogd_api, request, exc)
-                field = self._regrid_data_array(data_array).astype(np.float32)
-                units = str(data_array.attrs.get("units", ""))
-                display_offset = self._extract_display_lead_offset_hours(data_array, int(lead_hour))
-                return (
-                    field,
-                    units,
-                    display_offset,
-                    {
-                        "source_files": self._asset_filenames_for_request(ogd_api, request),
-                        "display_offset_hours": display_offset,
-                    },
-                )
-            except Exception as exc:
-                last_exc = exc
-                if attempt >= OGD_FETCH_RETRIES:
-                    break
-                time.sleep(OGD_FETCH_BASE_BACKOFF_SECONDS * (2 ** (attempt - 1)))
+                    asset_urls = self._safe_asset_urls_for_request(ogd_api, request)
+                    if not asset_urls:
+                        raise OGDRequestError(
+                            f"No OGD assets for variable={ogd_variable} ref={reference_iso} lead={effective_lead}"
+                        )
+                    try:
+                        data_array = ogd_api.get_from_ogd(request)
+                    except KeyError as exc:
+                        data_array = self._load_with_decode_fallbacks(ogd_api, request, exc)
+                    field = self._regrid_data_array(data_array).astype(np.float32)
+                    units = str(data_array.attrs.get("units", ""))
+                    display_offset = self._extract_display_lead_offset_hours(data_array, requested_lead)
+                    return (
+                        field,
+                        units,
+                        display_offset,
+                        {
+                            "source_files": self._asset_filenames_for_request(ogd_api, request),
+                            "display_offset_hours": display_offset,
+                        },
+                    )
+                except Exception as exc:
+                    last_exc = exc
+                    if attempt >= OGD_FETCH_RETRIES:
+                        break
+                    time.sleep(OGD_FETCH_BASE_BACKOFF_SECONDS * (2 ** (attempt - 1)))
 
         raise OGDRequestError(
             f"OGD fetch failed for variable={ogd_variable} ref={reference_iso} lead={lead_hour} "
-            f"after {OGD_FETCH_RETRIES} attempts: {last_exc}"
+            f"after horizon fallbacks {OGD_HORIZON_FALLBACK_STEPS} and {OGD_FETCH_RETRIES} attempts each: {last_exc}"
         ) from last_exc
 
     def _fetch_direct_member_stack(
@@ -1147,42 +1292,71 @@ class ForecastStore:
         reference_iso: str,
         lead_hour: int,
     ) -> Tuple[np.ndarray, str, int, Dict[str, object]]:
-        request = ogd_api.Request(
-            collection=ogd_collection,
-            variable=ogd_variable,
-            reference_datetime=reference_iso,
-            perturbed=True,
-            horizon=timedelta(hours=int(lead_hour)),
-        )
+        requested_lead = int(lead_hour)
         last_exc: Exception | None = None
-        for attempt in range(1, OGD_FETCH_RETRIES + 1):
-            try:
+
+        for effective_lead in self._horizon_candidates(requested_lead):
+            request = ogd_api.Request(
+                collection=ogd_collection,
+                variable=ogd_variable,
+                reference_datetime=reference_iso,
+                perturbed=True,
+                horizon=timedelta(hours=effective_lead),
+            )
+            for attempt in range(1, OGD_FETCH_RETRIES + 1):
                 try:
-                    data_array = ogd_api.get_from_ogd(request)
-                except KeyError as exc:
-                    data_array = self._load_with_decode_fallbacks(ogd_api, request, exc)
-                members = self._regrid_member_stack(data_array).astype(np.float32)
-                units = str(data_array.attrs.get("units", ""))
-                display_offset = self._extract_display_lead_offset_hours(data_array, int(lead_hour))
-                return (
-                    members,
-                    units,
-                    display_offset,
-                    {
-                        "source_files": self._asset_filenames_for_request(ogd_api, request),
-                        "display_offset_hours": display_offset,
-                    },
-                )
-            except Exception as exc:
-                last_exc = exc
-                if attempt >= OGD_FETCH_RETRIES:
-                    break
-                time.sleep(OGD_FETCH_BASE_BACKOFF_SECONDS * (2 ** (attempt - 1)))
+                    asset_urls = self._safe_asset_urls_for_request(ogd_api, request)
+                    if not asset_urls:
+                        raise OGDRequestError(
+                            f"No OGD assets for variable={ogd_variable} ref={reference_iso} lead={effective_lead} (perturbed)"
+                        )
+                    try:
+                        data_array = ogd_api.get_from_ogd(request)
+                    except KeyError as exc:
+                        data_array = self._load_with_decode_fallbacks(ogd_api, request, exc)
+                    members = self._regrid_member_stack(data_array).astype(np.float32)
+                    units = str(data_array.attrs.get("units", ""))
+                    display_offset = self._extract_display_lead_offset_hours(data_array, requested_lead)
+                    return (
+                        members,
+                        units,
+                        display_offset,
+                        {
+                            "source_files": self._asset_filenames_for_request(ogd_api, request),
+                            "display_offset_hours": display_offset,
+                        },
+                    )
+                except Exception as exc:
+                    last_exc = exc
+                    if attempt >= OGD_FETCH_RETRIES:
+                        break
+                    time.sleep(OGD_FETCH_BASE_BACKOFF_SECONDS * (2 ** (attempt - 1)))
 
         raise OGDRequestError(
             f"OGD ensemble fetch failed for variable={ogd_variable} ref={reference_iso} lead={lead_hour} "
-            f"after {OGD_FETCH_RETRIES} attempts: {last_exc}"
+            f"after horizon fallbacks {OGD_HORIZON_FALLBACK_STEPS} and {OGD_FETCH_RETRIES} attempts each: {last_exc}"
         ) from last_exc
+
+    @staticmethod
+    def _horizon_candidates(requested_lead: int) -> List[int]:
+        candidates: List[int] = []
+        for step in OGD_HORIZON_FALLBACK_STEPS:
+            lead = int(requested_lead + int(step))
+            if lead < 0:
+                continue
+            if lead not in candidates:
+                candidates.append(lead)
+        return candidates
+
+    @staticmethod
+    def _safe_asset_urls_for_request(ogd_api, request) -> List[str]:
+        try:
+            urls = ogd_api.get_asset_urls(request)
+        except Exception:
+            return []
+        if not urls:
+            return []
+        return [str(u) for u in urls if str(u).strip()]
 
     @staticmethod
     def _reduce_members(members: np.ndarray, type_id: str) -> np.ndarray:
@@ -1236,17 +1410,24 @@ class ForecastStore:
                 return result * MS_TO_KMH
             return result
 
-        if variable_id in {"tot_prec", "w_snow", "snow"}:
+        if variable_id in {"tot_prec", "w_snow", "snow", "rain_gsp", "rain_con", "snow_gsp", "snow_con"}:
             if units_compact in {"m", "meter", "metre", "mwe", "mofwaterequivalent"}:
                 return result * 1000.0
             return result
 
-        if variable_id in {"clct", "clcl"}:
+        if variable_id in {"clct", "clcl", "clcm", "clch", "relhum_2m"}:
             if units_compact in {"1", "fraction"}:
                 return result * 100.0
             finite = result[np.isfinite(result)]
             if finite.size and float(np.nanmax(finite)) <= 1.2:
                 return result * 100.0
+            return result
+
+        if variable_id == "pres_sfc":
+            if units_compact in {"pa", "pascal", "pascals"}:
+                return result / 100.0
+            if units_compact in {"kpa"}:
+                return result * 10.0
             return result
 
         if variable_id == "dursun":
@@ -1373,18 +1554,35 @@ class ForecastStore:
         mapping = {
             "T_2M": ["T_2M", "2t", "t_2m", "2T"],
             "TD_2M": ["TD_2M", "2d", "td_2m", "2D"],
+            "RELHUM_2M": ["RELHUM_2M", "2r", "relhum_2m", "rh_2m", "r_2m"],
+            "PRES_SFC": ["PRES_SFC", "sp", "pres_sfc", "sfc_pressure"],
             "U_10M": ["U_10M", "10u", "u10", "u_10m"],
             "V_10M": ["V_10M", "10v", "v10", "v_10m"],
             "VMAX_10M": ["VMAX_10M", "10fg", "vmax_10m", "gust"],
             "CLCT": ["CLCT", "tcc", "clct"],
             "CLCL": ["CLCL", "lcc", "clcl"],
+            "CLCM": ["CLCM", "mcc", "clcm"],
+            "CLCH": ["CLCH", "hcc", "clch"],
             "CEILING": ["CEILING", "ceiling"],
             "TOT_PREC": ["TOT_PREC", "tp", "tot_prec"],
+            "RAIN_GSP": ["RAIN_GSP", "rain_gsp", "lsrain", "rain"],
+            "RAIN_CON": ["RAIN_CON", "rain_con", "crain"],
             "W_SNOW": ["W_SNOW", "sd", "w_snow"],
             "SNOW": ["SNOW", "snow", "sf"],
+            "SNOW_GSP": ["SNOW_GSP", "snow_gsp", "lssnow"],
+            "SNOW_CON": ["SNOW_CON", "snow_con", "csnow"],
             "SNOWLMT": ["SNOWLMT", "snowlmt", "snowlmt_h"],
             "HZEROCL": ["HZEROCL", "hzerocl", "h0cl"],
             "DURSUN": ["DURSUN", "dursun", "sunshine_duration"],
+            "ASOB_S": ["ASOB_S", "asob_s"],
+            "ATHB_S": ["ATHB_S", "athb_s"],
+            "ASWDIR_S": ["ASWDIR_S", "aswdir_s"],
+            "ASWDIFD_S": ["ASWDIFD_S", "aswdifd_s"],
+            "ASHFL_S": ["ASHFL_S", "ashfl_s"],
+            "ALHFL_S": ["ALHFL_S", "alhfl_s"],
+            "CAPE_ML": ["CAPE_ML", "cape_ml", "cape"],
+            "CAPE_CON": ["CAPE_CON", "cape_con"],
+            "CIN_ML": ["CIN_ML", "cin_ml", "cin"],
         }
         return mapping.get(upper, [stac_variable, stac_variable.lower()])
 
@@ -1396,18 +1594,35 @@ class ForecastStore:
         aliases = {
             "T_2M": ["2t", "t_2m", "2T"],
             "TD_2M": ["2d", "td_2m", "2D"],
+            "RELHUM_2M": ["2r", "relhum_2m", "rh_2m", "r_2m"],
+            "PRES_SFC": ["sp", "pres_sfc", "sfc_pressure"],
             "U_10M": ["10u", "u10", "u_10m"],
             "V_10M": ["10v", "v10", "v_10m"],
             "VMAX_10M": ["10fg", "vmax_10m", "gust"],
             "CLCT": ["tcc", "clct"],
             "CLCL": ["lcc", "clcl"],
+            "CLCM": ["mcc", "clcm"],
+            "CLCH": ["hcc", "clch"],
             "CEILING": ["ceiling"],
             "TOT_PREC": ["tp", "tot_prec"],
+            "RAIN_GSP": ["rain_gsp", "lsrain", "rain"],
+            "RAIN_CON": ["rain_con", "crain"],
             "W_SNOW": ["sd", "w_snow"],
             "SNOW": ["snow", "sf"],
+            "SNOW_GSP": ["snow_gsp", "lssnow"],
+            "SNOW_CON": ["snow_con", "csnow"],
             "SNOWLMT": ["snowlmt", "snowlmt_h"],
             "HZEROCL": ["hzerocl", "h0cl"],
             "DURSUN": ["dursun", "sunshine_duration"],
+            "ASOB_S": ["asob_s"],
+            "ATHB_S": ["athb_s"],
+            "ASWDIR_S": ["aswdir_s"],
+            "ASWDIFD_S": ["aswdifd_s"],
+            "ASHFL_S": ["ashfl_s"],
+            "ALHFL_S": ["alhfl_s"],
+            "CAPE_ML": ["cape_ml", "cape"],
+            "CAPE_CON": ["cape_con"],
+            "CIN_ML": ["cin_ml", "cin"],
         }
         for alias in aliases.get(requested_variable.upper(), []):
             if alias in result_map:
