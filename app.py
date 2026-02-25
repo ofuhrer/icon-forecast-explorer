@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from io import BytesIO
 import json
+import logging
 import os
 import threading
 import time
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Dict, List
 from datetime import datetime, timedelta, timezone
@@ -23,6 +25,37 @@ COLORMAP_MANIFEST_PATH = Path(__file__).resolve().parent / "colormaps" / "manife
 SERIES_CACHE_TTL_SECONDS = float(os.getenv("SERIES_CACHE_TTL_SECONDS", "120"))
 SERIES_CACHE_MAX_ENTRIES = int(os.getenv("SERIES_CACHE_MAX_ENTRIES", "512"))
 SERIES_LATLON_BUCKET_DEG = float(os.getenv("SERIES_LATLON_BUCKET_DEG", "0.01"))
+
+
+def _configure_logging() -> logging.Logger:
+    level_name = os.getenv("ICON_LOG_LEVEL", "INFO").upper()
+    level = getattr(logging, level_name, logging.INFO)
+    logger = logging.getLogger("icon_forecast")
+    logger.setLevel(level)
+    if logger.handlers:
+        return logger
+
+    formatter = logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s")
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(formatter)
+    stream_handler.setLevel(level)
+    logger.addHandler(stream_handler)
+
+    log_file = os.getenv("ICON_LOG_FILE", "logs/icon_forecast.log").strip()
+    if log_file:
+        path = Path(log_file)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        file_handler = RotatingFileHandler(path, maxBytes=5_000_000, backupCount=3)
+        file_handler.setFormatter(formatter)
+        file_handler.setLevel(level)
+        logger.addHandler(file_handler)
+
+    logger.propagate = False
+    logger.info("Logger configured level=%s file=%s", logging.getLevelName(level), log_file or "disabled")
+    return logger
+
+
+LOGGER = _configure_logging()
 
 
 app = FastAPI(title="ICON Forecast Explorer")
@@ -68,11 +101,13 @@ _SERIES_KEY_LOCKS_GUARD = threading.Lock()
 
 @app.on_event("startup")
 def _startup() -> None:
+    LOGGER.info("App startup")
     store.start_background_prewarm()
 
 
 @app.on_event("shutdown")
 def _shutdown() -> None:
+    LOGGER.info("App shutdown")
     store.stop_background_prewarm()
 
 
@@ -96,6 +131,7 @@ def metadata() -> Dict[str, object]:
                     "display_name": var.display_name,
                     "unit": var.unit,
                     "range": [var.min_value, var.max_value],
+                    "lead_time_display_offset_hours": int(store.variable_lead_display_offset_hours(var.variable_id)),
                     "default_colormap": VARIABLE_TO_COLORMAP.get(var.variable_id, "default"),
                     "legend": _legend_for_variable(var.variable_id),
                 }
@@ -115,6 +151,7 @@ def metadata() -> Dict[str, object]:
         )
 
     first = datasets_payload[0] if datasets_payload else {"init_times": [], "lead_hours": [], "init_to_leads": {}}
+    LOGGER.debug("Metadata served datasets=%d", len(datasets_payload))
     return {
         "datasets": datasets_payload,
         "init_times": first["init_times"],
@@ -135,10 +172,24 @@ def value(
     lon: float = Query(..., ge=-180, le=180),
 ) -> Dict[str, object]:
     try:
-        val = store.get_value(dataset_id, variable_id, init, lead, lat=lat, lon=lon, type_id=type_id)
+        val = store.get_cached_value(dataset_id, variable_id, init, lead, lat=lat, lon=lon, type_id=type_id)
+        if val is None:
+            queued = store.queue_field_fetch(dataset_id, variable_id, init, lead, type_id=type_id)
+            LOGGER.debug(
+                "Value cache miss dataset=%s type=%s var=%s init=%s lead=%s queued=%s",
+                dataset_id,
+                type_id,
+                variable_id,
+                init,
+                lead,
+                queued,
+            )
+            raise HTTPException(status_code=503, detail="Value not cached yet")
     except ValueError as exc:
+        LOGGER.warning("Value request invalid: %s", exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
+        LOGGER.warning("Value request runtime error: %s", exc)
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     return {
@@ -162,12 +213,72 @@ def prefetch(
     lead: int = Query(..., ge=0),
 ) -> Dict[str, object]:
     try:
-        store.get_field(dataset_id, variable_id, init, lead, type_id=type_id)
+        queued = store.queue_field_fetch(dataset_id, variable_id, init, lead, type_id=type_id)
+        LOGGER.debug(
+            "Prefetch request dataset=%s type=%s var=%s init=%s lead=%s queued=%s",
+            dataset_id,
+            type_id,
+            variable_id,
+            init,
+            lead,
+            queued,
+        )
     except ValueError as exc:
+        LOGGER.warning("Prefetch request invalid: %s", exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
+        LOGGER.warning("Prefetch request runtime error: %s", exc)
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    return {"ok": True}
+    return {"ok": True, "queued": bool(queued)}
+
+
+@app.get("/api/field-debug")
+def field_debug(
+    dataset_id: str = Query(...),
+    type_id: str = Query("control"),
+    variable_id: str = Query(...),
+    init: str = Query(...),
+    lead: int = Query(..., ge=0),
+) -> Dict[str, object]:
+    try:
+        info = store.get_cached_field_debug_info(
+            dataset_id=dataset_id,
+            variable_id=variable_id,
+            init_str=init,
+            lead_hour=lead,
+            type_id=type_id,
+        )
+    except ValueError as exc:
+        LOGGER.warning("Field debug request invalid: %s", exc)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if info is None:
+        LOGGER.debug(
+            "Field debug cache miss dataset=%s type=%s var=%s init=%s lead=%s",
+            dataset_id,
+            type_id,
+            variable_id,
+            init,
+            lead,
+        )
+        store.queue_field_fetch(dataset_id, variable_id, init, lead, type_id=type_id)
+        return {
+            "dataset_id": dataset_id,
+            "type_id": type_id,
+            "variable_id": variable_id,
+            "init": init,
+            "lead": lead,
+            "status": "loading",
+            "debug": None,
+        }
+    return {
+        "dataset_id": dataset_id,
+        "type_id": type_id,
+        "variable_id": variable_id,
+        "init": init,
+        "lead": lead,
+        "status": "ready",
+        "debug": info,
+    }
 
 
 @app.get("/api/series")
@@ -222,17 +333,49 @@ def tiles(
     type_id: str = Query("control"),
 ) -> Response:
     try:
-        field = store.get_field(dataset_id, variable_id, init, lead, type_id=type_id)
+        field = store.get_cached_field(dataset_id, variable_id, init, lead, type_id=type_id)
+        if field is None:
+            # Keep map interaction responsive even under background queue pressure:
+            # fetch requested field synchronously (single-flight guarded in store).
+            LOGGER.info(
+                "Tile cache miss; sync-fetch dataset=%s type=%s var=%s init=%s lead=%s z=%s x=%s y=%s",
+                dataset_id,
+                type_id,
+                variable_id,
+                init,
+                lead,
+                z,
+                x,
+                y,
+            )
+            field = store.get_field(dataset_id, variable_id, init, lead, type_id=type_id)
     except ValueError as exc:
+        LOGGER.warning("Tile request invalid: %s", exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
+        LOGGER.warning("Tile request runtime error: %s", exc)
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception:
+        LOGGER.exception(
+            "Tile request unexpected failure dataset=%s type=%s var=%s init=%s lead=%s z=%s x=%s y=%s",
+            dataset_id,
+            type_id,
+            variable_id,
+            init,
+            lead,
+            z,
+            x,
+            y,
+        )
+        raise
 
     rgba = render_tile_rgba(field, z, x, y, variable_id)
     image = Image.fromarray(rgba, mode="RGBA")
     buf = BytesIO()
     image.save(buf, format="PNG", optimize=True)
-    return Response(content=buf.getvalue(), media_type="image/png")
+    return Response(content=buf.getvalue(), media_type="image/png", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/health")

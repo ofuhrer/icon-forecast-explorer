@@ -98,6 +98,23 @@ class WeatherDataTests(unittest.TestCase):
                 type_id="control",
             )
 
+    def test_cached_field_handles_corrupt_npz(self):
+        store = ForecastStore()
+        dataset_id = "icon-ch1-eps-control"
+        init = store.init_times(dataset_id)[0]
+        lead = 0
+        path = store._field_cache_path(dataset_id, "control", "t_2m", init, lead)
+        path.write_bytes(b"")
+        result = store.get_cached_field(
+            dataset_id=dataset_id,
+            variable_id="t_2m",
+            init_str=init,
+            lead_hour=lead,
+            type_id="control",
+        )
+        self.assertIsNone(result)
+        self.assertFalse(path.exists())
+
     def test_fill_nan_with_neighbors_does_not_wrap_edges(self):
         grid = np.array([[np.nan, 1.0, np.nan, np.nan, 100.0]], dtype=np.float32)
         filled = ForecastStore._fill_nan_with_neighbors(grid)
@@ -126,6 +143,20 @@ class WeatherDataTests(unittest.TestCase):
                 path.unlink(missing_ok=True)
             else:
                 path.write_text(previous)
+
+    def test_extract_display_lead_offset_from_end_step(self):
+        class _FakeArray:
+            attrs = {"endStep": 5}
+
+        offset = ForecastStore._extract_display_lead_offset_hours(_FakeArray(), requested_lead_hour=4)
+        self.assertEqual(offset, 1)
+
+    def test_extract_display_lead_offset_from_step_range(self):
+        class _FakeArray:
+            attrs = {"stepRange": "4-5"}
+
+        offset = ForecastStore._extract_display_lead_offset_hours(_FakeArray(), requested_lead_hour=4)
+        self.assertEqual(offset, 1)
 
 
 if __name__ == "__main__":

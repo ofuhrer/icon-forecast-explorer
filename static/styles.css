@@ -223,6 +223,14 @@ button {
   font-variant-numeric: tabular-nums;
 }
 
+#fieldDebugInfo {
+  margin-top: 2px;
+  font-size: 0.62rem;
+  color: var(--muted);
+  font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
+  word-break: break-all;
+}
+
 .tooltip {
   position: absolute;
   pointer-events: none;

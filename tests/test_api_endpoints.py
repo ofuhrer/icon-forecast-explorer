@@ -70,8 +70,20 @@ class _FakeStore:
     def refresh_status(self, dataset_id):
         return {"refreshing": False, "last_refreshed_at": "2026-02-25T00:00:00+00:00"}
 
+    def variable_lead_display_offset_hours(self, variable_id):
+        return 0
+
+    def get_cached_field(self, dataset_id, variable_id, init, lead, type_id="control"):
+        return np.full((380, 540), 5.0, dtype=np.float32)
+
     def get_field(self, dataset_id, variable_id, init, lead, type_id="control"):
         return np.full((380, 540), 5.0, dtype=np.float32)
+
+    def get_cached_value(self, dataset_id, variable_id, init, lead, lat, lon, type_id="control"):
+        return 5.0
+
+    def queue_field_fetch(self, dataset_id, variable_id, init, lead, type_id="control"):
+        return True
 
 
 class _EmptyMetaStore(_FakeStore):
@@ -83,6 +95,24 @@ class _EmptyMetaStore(_FakeStore):
 
     def init_to_leads(self, dataset_id):
         return {}
+
+
+class _CacheMissStore(_FakeStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self.get_field_calls = 0
+
+    def get_cached_field(self, dataset_id, variable_id, init, lead, type_id="control"):
+        return None
+
+    def get_field(self, dataset_id, variable_id, init, lead, type_id="control"):
+        self.get_field_calls += 1
+        return np.full((380, 540), 5.0, dtype=np.float32)
+
+
+class _ValueMissStore(_FakeStore):
+    def get_cached_value(self, dataset_id, variable_id, init, lead, lat, lon, type_id="control"):
+        return None
 
 
 @unittest.skipIf(app_module is None, "fastapi dependencies not available")
@@ -120,6 +150,49 @@ class ApiEndpointTests(unittest.TestCase):
             )
         self.assertEqual(response.media_type, "image/png")
         self.assertTrue(response.body.startswith(b"\x89PNG"))
+
+    def test_tiles_endpoint_sync_fetches_when_not_cached(self):
+        fake_store = _CacheMissStore()
+        with patch.object(app_module, "store", fake_store):
+            response = app_module.tiles(
+                dataset_id="icon-ch1-eps-control",
+                variable_id="t_2m",
+                init="2026022500",
+                lead=0,
+                z=7,
+                x=67,
+                y=45,
+                type_id="control",
+            )
+        self.assertEqual(response.media_type, "image/png")
+        self.assertEqual(fake_store.get_field_calls, 1)
+
+    def test_value_endpoint_returns_503_when_not_cached(self):
+        fake_store = _ValueMissStore()
+        with patch.object(app_module, "store", fake_store):
+            with self.assertRaises(app_module.HTTPException) as ctx:
+                app_module.value(
+                    dataset_id="icon-ch1-eps-control",
+                    variable_id="t_2m",
+                    init="2026022500",
+                    lead=0,
+                    lat=47.0,
+                    lon=8.0,
+                    type_id="control",
+                )
+        self.assertEqual(ctx.exception.status_code, 503)
+
+    def test_prefetch_endpoint_returns_queue_hint(self):
+        fake_store = _FakeStore()
+        with patch.object(app_module, "store", fake_store):
+            payload = app_module.prefetch(
+                dataset_id="icon-ch1-eps-control",
+                variable_id="t_2m",
+                init="2026022500",
+                lead=0,
+                type_id="control",
+            )
+        self.assertEqual(payload, {"ok": True, "queued": True})
 
 
 if __name__ == "__main__":

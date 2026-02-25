@@ -24,9 +24,8 @@ export function renderMeteogram({
   pinnedPoint,
   seriesData,
   lead,
-  variableRange = null,
+  leadLabelOffsetHours = 0,
   errorText = "",
-  statusText = "",
 }) {
   const ctx = canvas.getContext("2d");
   const w = canvas.width;
@@ -47,7 +46,7 @@ export function renderMeteogram({
 
   const basePointText = `${pinnedPoint.lat.toFixed(3)}, ${pinnedPoint.lon.toFixed(3)}`;
   if (pointEl) {
-    pointEl.textContent = statusText ? `${basePointText} ${statusText}` : basePointText;
+    pointEl.textContent = basePointText;
   }
 
   if (errorText) {
@@ -96,7 +95,7 @@ export function renderMeteogram({
   const x1 = w - padR;
   const y1 = h - padB;
 
-  const scale = computeMeteogramScale(all, variableRange);
+  const scale = computeMeteogramScale(all);
   const minV = scale.min;
   const maxV = scale.max;
   const tickStep = scale.step;
@@ -163,9 +162,6 @@ export function renderMeteogram({
         Number.isFinite(Number(p10[i])) &&
         Number.isFinite(Number(p90[i]))
     );
-  const bandHiddenReason = hasFullBandForControl
-    ? ""
-    : "band hidden: missing p10/p90 for some control points";
 
   if (hasFullBandForControl) {
     ctx.beginPath();
@@ -260,21 +256,15 @@ export function renderMeteogram({
     ctx.moveTo(x, y1);
     ctx.lineTo(x, y1 + 4);
     ctx.stroke();
-    const label = `+${fcLead}h`;
+    const labelLead = Number(fcLead) + Number(leadLabelOffsetHours || 0);
+    const label = `+${labelLead}h`;
     const textWidth = ctx.measureText(label).width;
     const tx = Math.max(x0, Math.min(x1 - textWidth, x - textWidth / 2));
     ctx.fillText(label, tx, h - 6);
   }
 
   if (pointEl) {
-    const parts = [];
-    if (statusText) {
-      parts.push(statusText);
-    }
-    if (bandHiddenReason) {
-      parts.push(`(${bandHiddenReason})`);
-    }
-    pointEl.textContent = parts.length > 0 ? `${basePointText} ${parts.join(" ")}` : basePointText;
+    pointEl.textContent = basePointText;
   }
 }
 
@@ -296,7 +286,7 @@ function computeNiceScale(min, max, desiredTicks = 5) {
   return { min: niceMin, max: niceMax, step };
 }
 
-function computeMeteogramScale(allValues, variableRange) {
+function computeMeteogramScale(allValues) {
   const sorted = allValues
     .filter((v) => Number.isFinite(v))
     .slice()
@@ -309,54 +299,12 @@ function computeMeteogramScale(allValues, variableRange) {
   let workMin = rawMin;
   let workMax = rawMax;
 
-  if (sorted.length >= 6) {
-    const q02 = quantileSorted(sorted, 0.02);
-    const q98 = quantileSorted(sorted, 0.98);
-    if (Number.isFinite(q02) && Number.isFinite(q98) && q98 > q02) {
-      workMin = q02;
-      workMax = q98;
-    }
-  }
-
   const range = workMax - workMin;
   const pad = range > 0 ? range * 0.08 : 1;
   workMin -= pad;
   workMax += pad;
 
-  if (Array.isArray(variableRange) && variableRange.length === 2) {
-    const boundMin = Number(variableRange[0]);
-    const boundMax = Number(variableRange[1]);
-    if (Number.isFinite(boundMin) && Number.isFinite(boundMax) && boundMax > boundMin) {
-      workMin = Math.max(workMin, boundMin);
-      workMax = Math.min(workMax, boundMax);
-      if (!(workMax > workMin)) {
-        workMin = boundMin;
-        workMax = boundMax;
-      }
-    }
-  }
-
   return computeNiceScale(workMin, workMax, 5);
-}
-
-function quantileSorted(sorted, q) {
-  if (!sorted.length) {
-    return NaN;
-  }
-  if (q <= 0) {
-    return sorted[0];
-  }
-  if (q >= 1) {
-    return sorted[sorted.length - 1];
-  }
-  const pos = (sorted.length - 1) * q;
-  const lo = Math.floor(pos);
-  const hi = Math.ceil(pos);
-  if (lo === hi) {
-    return sorted[lo];
-  }
-  const frac = pos - lo;
-  return sorted[lo] * (1 - frac) + sorted[hi] * frac;
 }
 
 function niceNumber(value, round) {

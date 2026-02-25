@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import json
+import logging
 import os
 import re
 import threading
 import sys
 import time
+from urllib.parse import urlparse
+import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -29,11 +33,18 @@ FIELD_CACHE_RETENTION_HOURS = 30
 FIELD_CACHE_CLEANUP_INTERVAL_SECONDS = 300
 SUPPORTED_FORECAST_TYPES = {"control", "mean", "median", "p10", "p90"}
 HOT_PREWARM_INTERVAL_SECONDS = 300
-HOT_PREWARM_VARIABLES = ("t_2m", "wind_speed_10m", "tot_prec")
-HOT_PREWARM_TYPES = ("control", "mean")
+HOT_PREWARM_VARIABLES = tuple(
+    v.strip()
+    for v in os.getenv("HOT_PREWARM_VARIABLES", "t_2m,tot_prec").split(",")
+    if v.strip()
+)
+HOT_PREWARM_TYPES = ("control",)
 HOT_PREWARM_LEADS = (0, 6, 12)
+HOT_PREWARM_ENABLED = os.getenv("HOT_PREWARM_ENABLED", "1").strip() == "1"
 OGD_FETCH_RETRIES = 3
 OGD_FETCH_BASE_BACKOFF_SECONDS = 0.4
+BACKGROUND_FETCH_WORKERS = int(os.getenv("BACKGROUND_FETCH_WORKERS", "2"))
+LOGGER = logging.getLogger("icon_forecast.weather_data")
 
 
 class OGDIngestionError(RuntimeError):
@@ -57,6 +68,7 @@ class VariableMeta:
     max_value: float
     ogd_variable: str | None = None
     ogd_components: Tuple[str, ...] = ()
+    lead_time_display_offset_hours: int = 0
 
 
 @dataclass(frozen=True)
@@ -213,16 +225,27 @@ class ForecastStore:
         self._catalog_cache_dir.mkdir(parents=True, exist_ok=True)
 
         self._field_cache: Dict[Tuple[str, ...], np.ndarray] = {}
+        self._field_debug_info: Dict[Tuple[str, ...], Dict[str, object]] = {}
         self._key_locks: Dict[Tuple[str, ...], threading.Lock] = {}
         self._key_locks_guard = threading.Lock()
         self._catalog_guard = threading.Lock()
         self._refresh_state_guard = threading.Lock()
         self._cleanup_guard = threading.Lock()
         self._prewarm_guard = threading.Lock()
+        self._display_offset_guard = threading.Lock()
+        self._background_fetch_guard = threading.Lock()
+        self._background_fetch_inflight: set[Tuple[str, ...]] = set()
+        self._background_fetch_executor = ThreadPoolExecutor(
+            max_workers=max(1, BACKGROUND_FETCH_WORKERS),
+            thread_name_prefix="field-fetch",
+        )
 
         self._catalogs: Dict[str, Dict[str, object]] = {}
         self._catalog_refreshed_at: Dict[str, datetime] = {}
         self._refresh_inflight: set[str] = set()
+        self._variable_lead_display_offsets: Dict[str, int] = {
+            variable_id: int(meta.lead_time_display_offset_hours) for variable_id, meta in self._variables.items()
+        }
         self._prewarm_started = False
         self._prewarm_thread: threading.Thread | None = None
         self._prewarm_stop = threading.Event()
@@ -239,6 +262,9 @@ class ForecastStore:
         self._cleanup_field_cache(force=True)
 
     def start_background_prewarm(self) -> None:
+        if not HOT_PREWARM_ENABLED:
+            LOGGER.info("Hot prewarm disabled by HOT_PREWARM_ENABLED")
+            return
         with self._prewarm_guard:
             if self._prewarm_started:
                 return
@@ -250,10 +276,47 @@ class ForecastStore:
                 daemon=True,
             )
             self._prewarm_thread.start()
+            LOGGER.info("Started hot prewarm thread")
 
     def stop_background_prewarm(self) -> None:
         with self._prewarm_guard:
             self._prewarm_stop.set()
+        self._background_fetch_executor.shutdown(wait=False, cancel_futures=False)
+        LOGGER.info("Stopped background workers")
+
+    def queue_field_fetch(
+        self,
+        dataset_id: str,
+        variable_id: str,
+        init_str: str,
+        lead_hour: int,
+        type_id: str = "control",
+    ) -> bool:
+        self._validate_request(dataset_id, variable_id, init_str, lead_hour, type_id)
+        key = (dataset_id, type_id, variable_id, init_str, lead_hour)
+        if key in self._field_cache:
+            return False
+        if self._field_cache_path(dataset_id, type_id, variable_id, init_str, lead_hour).exists():
+            return False
+
+        with self._background_fetch_guard:
+            if key in self._background_fetch_inflight:
+                return False
+            self._background_fetch_inflight.add(key)
+
+        self._background_fetch_executor.submit(self._background_fetch_job, key)
+        LOGGER.debug("Queued field fetch key=%s", key)
+        return True
+
+    def _background_fetch_job(self, key: Tuple[str, ...]) -> None:
+        dataset_id, type_id, variable_id, init_str, lead_hour = key
+        try:
+            self.get_field(dataset_id, variable_id, init_str, int(lead_hour), type_id=str(type_id))
+        except Exception:
+            LOGGER.exception("Background field fetch failed key=%s", key)
+        finally:
+            with self._background_fetch_guard:
+                self._background_fetch_inflight.discard(key)
 
     def _prewarm_loop(self) -> None:
         while not self._prewarm_stop.is_set():
@@ -265,17 +328,37 @@ class ForecastStore:
             self._prewarm_stop.wait(HOT_PREWARM_INTERVAL_SECONDS)
 
     def prewarm_hot_cache_once(self) -> None:
+        # Prioritize interactive requests over proactive warming.
+        if self._background_fetch_inflight:
+            LOGGER.debug("Skipping hot prewarm cycle: interactive fetches in-flight=%d", len(self._background_fetch_inflight))
+            return
         self.refresh_catalog(force=False, blocking=True)
         for ds in self.dataset_metas:
             init = self.latest_complete_init(ds.dataset_id)
             if not init:
                 continue
             leads_available = set(self.lead_hours_for_init(ds.dataset_id, init))
-            for variable_id in HOT_PREWARM_VARIABLES:
+            if ds.dataset_id == "icon-ch2-eps-control":
+                prewarm_variables = ("t_2m", "tot_prec")
+            else:
+                prewarm_variables = HOT_PREWARM_VARIABLES
+            for variable_id in prewarm_variables:
+                if self._background_fetch_inflight:
+                    LOGGER.debug(
+                        "Aborting hot prewarm cycle early: interactive fetches in-flight=%d",
+                        len(self._background_fetch_inflight),
+                    )
+                    return
                 if variable_id not in self._variables:
                     continue
                 for type_id in HOT_PREWARM_TYPES:
                     for lead in HOT_PREWARM_LEADS:
+                        if self._background_fetch_inflight:
+                            LOGGER.debug(
+                                "Aborting hot prewarm lead loop: interactive fetches in-flight=%d",
+                                len(self._background_fetch_inflight),
+                            )
+                            return
                         if lead not in leads_available:
                             continue
                         try:
@@ -302,6 +385,20 @@ class ForecastStore:
         if meta is None:
             raise ValueError(f"Unknown variable_id: {variable_id}")
         return meta
+
+    def variable_lead_display_offset_hours(self, variable_id: str) -> int:
+        self.variable_meta(variable_id)
+        with self._display_offset_guard:
+            return int(self._variable_lead_display_offsets.get(variable_id, 0))
+
+    def _record_variable_lead_display_offset_hours(self, variable_id: str, offset_hours: int) -> None:
+        self.variable_meta(variable_id)
+        if not isinstance(offset_hours, int):
+            return
+        if abs(offset_hours) > 6:
+            return
+        with self._display_offset_guard:
+            self._variable_lead_display_offsets[variable_id] = offset_hours
 
     @property
     def dataset_metas(self) -> List[DatasetMeta]:
@@ -414,14 +511,117 @@ class ForecastStore:
 
             disk_path = self._field_cache_path(dataset_id, type_id, variable_id, init_str, lead_hour)
             if disk_path.exists():
-                field = np.load(disk_path)["field"]
-                self._field_cache[key] = field
-                return field
+                loaded = self._load_cached_field_file(disk_path)
+                if loaded is not None:
+                    self._field_cache[key] = loaded
+                    debug_info = self._load_field_debug_info(disk_path)
+                    if debug_info is not None:
+                        self._field_debug_info[key] = debug_info
+                    return loaded
 
-            field = self._fetch_and_regrid(dataset_id, variable_id, init_str, lead_hour, type_id=type_id)
-            np.savez_compressed(disk_path, field=field)
+            field, debug_info = self._fetch_and_regrid(dataset_id, variable_id, init_str, lead_hour, type_id=type_id)
+            self._save_cached_field_file(disk_path, field)
             self._field_cache[key] = field
+            if debug_info:
+                self._field_debug_info[key] = debug_info
+                self._save_field_debug_info(disk_path, debug_info)
             return field
+
+    def get_cached_field_debug_info(
+        self,
+        dataset_id: str,
+        variable_id: str,
+        init_str: str,
+        lead_hour: int,
+        type_id: str = "control",
+    ) -> Dict[str, object] | None:
+        self._dataset_config(dataset_id)
+        if variable_id not in self._variables:
+            raise ValueError(f"Unknown variable_id: {variable_id}")
+        if type_id not in SUPPORTED_FORECAST_TYPES:
+            raise ValueError(f"Unknown type_id: {type_id}")
+        key = (dataset_id, type_id, variable_id, init_str, lead_hour)
+        info = self._field_debug_info.get(key)
+        if info is not None:
+            return dict(info)
+        disk_path = self._field_cache_path(dataset_id, type_id, variable_id, init_str, lead_hour)
+        if not disk_path.exists():
+            return None
+        info = self._load_field_debug_info(disk_path)
+        if info is None:
+            info = self._build_field_debug_info_from_request(
+                dataset_id=dataset_id,
+                type_id=type_id,
+                variable_id=variable_id,
+                init_str=init_str,
+                lead_hour=lead_hour,
+            )
+            if info is None:
+                return None
+            self._save_field_debug_info(disk_path, info)
+        self._field_debug_info[key] = info
+        return dict(info)
+
+    def _build_field_debug_info_from_request(
+        self,
+        dataset_id: str,
+        type_id: str,
+        variable_id: str,
+        init_str: str,
+        lead_hour: int,
+    ) -> Dict[str, object] | None:
+        try:
+            from meteodatalab import ogd_api
+        except Exception:
+            return None
+
+        cfg = self._dataset_config(dataset_id)
+        variable = self.variable_meta(variable_id)
+        reference_iso = self._init_to_iso(init_str)
+
+        source_files: set[str] = set()
+        source_variables: List[str] = []
+
+        def _collect(ogd_variable: str, perturbed: bool) -> None:
+            request = ogd_api.Request(
+                collection=cfg.ogd_collection,
+                variable=ogd_variable,
+                reference_datetime=reference_iso,
+                perturbed=perturbed,
+                horizon=timedelta(hours=int(lead_hour)),
+            )
+            names = self._asset_filenames_for_request(ogd_api, request)
+            source_files.update(names)
+            source_variables.append(ogd_variable + ("(perturbed)" if perturbed else "(control)"))
+
+        if variable.ogd_components:
+            if tuple(variable.ogd_components) != ("U_10M", "V_10M"):
+                return None
+            if type_id == "control":
+                _collect("U_10M", False)
+                _collect("V_10M", False)
+            else:
+                _collect("U_10M", False)
+                _collect("U_10M", True)
+                _collect("V_10M", False)
+                _collect("V_10M", True)
+        else:
+            if not variable.ogd_variable:
+                return None
+            if type_id == "control":
+                _collect(variable.ogd_variable, False)
+            else:
+                _collect(variable.ogd_variable, False)
+                _collect(variable.ogd_variable, True)
+
+        if not source_files:
+            return None
+        return {
+            "source_files": sorted(source_files),
+            "source_variables": source_variables,
+            "mode": type_id,
+            "synthetic": True,
+        }
 
     def get_value(
         self,
@@ -489,9 +689,11 @@ class ForecastStore:
         disk_path = self._field_cache_path(dataset_id, type_id, variable_id, init_str, lead_hour)
         if not disk_path.exists():
             return None
-        field = np.load(disk_path)["field"]
-        self._field_cache[key] = field
-        return field
+        loaded = self._load_cached_field_file(disk_path)
+        if loaded is None:
+            return None
+        self._field_cache[key] = loaded
+        return loaded
 
     def _catalog_for(self, dataset_id: str) -> Dict[str, object]:
         if dataset_id not in self._catalogs:
@@ -527,9 +729,53 @@ class ForecastStore:
             f"{FIELD_CACHE_VERSION}_{dataset_id}_{type_id}_{variable_id}_{init_str}_{lead_hour:03d}.npz"
         )
 
+    @staticmethod
+    def _field_debug_path(field_cache_path: Path) -> Path:
+        return field_cache_path.with_suffix(".json")
+
+    def _load_field_debug_info(self, field_cache_path: Path) -> Dict[str, object] | None:
+        path = self._field_debug_path(field_cache_path)
+        if not path.exists():
+            return None
+        try:
+            payload = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+        return payload
+
+    def _save_field_debug_info(self, field_cache_path: Path, debug_info: Dict[str, object]) -> None:
+        path = self._field_debug_path(field_cache_path)
+        try:
+            path.write_text(json.dumps(debug_info))
+        except OSError:
+            LOGGER.warning("Failed to write field debug info path=%s", path)
+            pass
+
+    @staticmethod
+    def _load_cached_field_file(path: Path) -> np.ndarray | None:
+        try:
+            return np.load(path)["field"]
+        except (EOFError, OSError, zipfile.BadZipFile, KeyError, ValueError):
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            LOGGER.warning("Dropped corrupt/incomplete field cache file path=%s", path)
+            return None
+
+    @staticmethod
+    def _save_cached_field_file(path: Path, field: np.ndarray) -> None:
+        tmp_path = path.with_suffix(path.suffix + ".tmp")
+        with tmp_path.open("wb") as tmp_file:
+            np.savez_compressed(tmp_file, field=field)
+        os.replace(tmp_path, path)
+        LOGGER.debug("Saved field cache path=%s bytes=%s", path, path.stat().st_size if path.exists() else -1)
+
     def _fetch_and_regrid(
         self, dataset_id: str, variable_id: str, init_str: str, lead_hour: int, type_id: str = "control"
-    ) -> np.ndarray:
+    ) -> Tuple[np.ndarray, Dict[str, object]]:
         cfg = self._dataset_config(dataset_id)
         variable = self.variable_meta(variable_id)
         self._ensure_eccodes_definition_path()
@@ -557,29 +803,39 @@ class ForecastStore:
 
     def _fetch_control_field(
         self, ogd_api, ogd_collection: str, variable_id: str, variable: VariableMeta, reference_iso: str, lead_hour: int
-    ) -> np.ndarray:
+    ) -> Tuple[np.ndarray, Dict[str, object]]:
         if variable.ogd_components:
             if tuple(variable.ogd_components) == ("U_10M", "V_10M"):
-                u_field, u_units = self._fetch_direct_regridded(
+                u_field, u_units, _u_offset, u_info = self._fetch_direct_regridded(
                     ogd_api, ogd_collection, "U_10M", reference_iso, lead_hour
                 )
-                v_field, v_units = self._fetch_direct_regridded(
+                v_field, v_units, _v_offset, v_info = self._fetch_direct_regridded(
                     ogd_api, ogd_collection, "V_10M", reference_iso, lead_hour
                 )
                 u_field = self._normalize_variable_units(u_field, "wind_speed_10m", units_hint=u_units)
                 v_field = self._normalize_variable_units(v_field, "wind_speed_10m", units_hint=v_units)
                 field = np.sqrt(u_field * u_field + v_field * v_field).astype(np.float32)
-                return field
+                return field, {
+                    "source_files": sorted(set(u_info.get("source_files", []) + v_info.get("source_files", []))),
+                    "source_variables": ["U_10M", "V_10M"],
+                    "mode": "control",
+                }
             raise RuntimeError(f"Unsupported derived variable: {variable_id}")
 
         if not variable.ogd_variable:
             raise RuntimeError(f"Variable {variable_id} has no direct OGD mapping")
 
-        field, units = self._fetch_direct_regridded(
+        field, units, display_offset, info = self._fetch_direct_regridded(
             ogd_api, ogd_collection, variable.ogd_variable, reference_iso, lead_hour
         )
+        self._record_variable_lead_display_offset_hours(variable_id, display_offset)
         field = self._normalize_variable_units(field, variable_id, units_hint=units)
-        return field.astype(np.float32)
+        return field.astype(np.float32), {
+            "source_files": info.get("source_files", []),
+            "source_variables": [variable.ogd_variable],
+            "mode": "control",
+            "display_offset_hours": display_offset,
+        }
 
     def _fetch_ensemble_stat_field(
         self,
@@ -592,14 +848,22 @@ class ForecastStore:
         reference_iso: str,
         lead_hour: int,
         type_id: str,
-    ) -> np.ndarray:
+    ) -> Tuple[np.ndarray, Dict[str, object]]:
         if variable.ogd_components:
             if tuple(variable.ogd_components) != ("U_10M", "V_10M"):
                 raise RuntimeError(f"Unsupported derived variable: {variable_id}")
-            u_ctrl, u_ctrl_units = self._fetch_direct_regridded(ogd_api, ogd_collection, "U_10M", reference_iso, lead_hour)
-            v_ctrl, v_ctrl_units = self._fetch_direct_regridded(ogd_api, ogd_collection, "V_10M", reference_iso, lead_hour)
-            u_ens, u_ens_units = self._fetch_direct_member_stack(ogd_api, ogd_collection, "U_10M", reference_iso, lead_hour)
-            v_ens, v_ens_units = self._fetch_direct_member_stack(ogd_api, ogd_collection, "V_10M", reference_iso, lead_hour)
+            u_ctrl, u_ctrl_units, _u_ctrl_offset, u_ctrl_info = self._fetch_direct_regridded(
+                ogd_api, ogd_collection, "U_10M", reference_iso, lead_hour
+            )
+            v_ctrl, v_ctrl_units, _v_ctrl_offset, v_ctrl_info = self._fetch_direct_regridded(
+                ogd_api, ogd_collection, "V_10M", reference_iso, lead_hour
+            )
+            u_ens, u_ens_units, _u_ens_offset, u_ens_info = self._fetch_direct_member_stack(
+                ogd_api, ogd_collection, "U_10M", reference_iso, lead_hour
+            )
+            v_ens, v_ens_units, _v_ens_offset, v_ens_info = self._fetch_direct_member_stack(
+                ogd_api, ogd_collection, "V_10M", reference_iso, lead_hour
+            )
 
             u_ctrl = self._normalize_variable_units(u_ctrl, "wind_speed_10m", units_hint=u_ctrl_units).astype(np.float32)
             v_ctrl = self._normalize_variable_units(v_ctrl, "wind_speed_10m", units_hint=v_ctrl_units).astype(np.float32)
@@ -610,22 +874,39 @@ class ForecastStore:
             ens_speed = np.sqrt(u_ens * u_ens + v_ens * v_ens).astype(np.float32)
             members = np.concatenate([ctrl_speed[np.newaxis, ...], ens_speed], axis=0)
             self._check_ensemble_member_count(dataset_id, expected_members_total, members.shape[0], variable_id, init=reference_iso, lead_hour=lead_hour)
-            return self._reduce_members(members, type_id)
+            return self._reduce_members(members, type_id), {
+                "source_files": sorted(
+                    set(
+                        u_ctrl_info.get("source_files", [])
+                        + v_ctrl_info.get("source_files", [])
+                        + u_ens_info.get("source_files", [])
+                        + v_ens_info.get("source_files", [])
+                    )
+                ),
+                "source_variables": ["U_10M", "V_10M"],
+                "mode": type_id,
+            }
 
         if not variable.ogd_variable:
             raise RuntimeError(f"Variable {variable_id} has no direct OGD mapping")
 
-        ctrl, ctrl_units = self._fetch_direct_regridded(
+        ctrl, ctrl_units, ctrl_display_offset, ctrl_info = self._fetch_direct_regridded(
             ogd_api, ogd_collection, variable.ogd_variable, reference_iso, lead_hour
         )
-        ens, ens_units = self._fetch_direct_member_stack(
+        ens, ens_units, _ens_display_offset, ens_info = self._fetch_direct_member_stack(
             ogd_api, ogd_collection, variable.ogd_variable, reference_iso, lead_hour
         )
+        self._record_variable_lead_display_offset_hours(variable_id, ctrl_display_offset)
         ctrl = self._normalize_variable_units(ctrl, variable_id, units_hint=ctrl_units).astype(np.float32)
         ens = self._normalize_variable_units(ens, variable_id, units_hint=ens_units).astype(np.float32)
         members = np.concatenate([ctrl[np.newaxis, ...], ens], axis=0)
         self._check_ensemble_member_count(dataset_id, expected_members_total, members.shape[0], variable_id, init=reference_iso, lead_hour=lead_hour)
-        return self._reduce_members(members, type_id)
+        return self._reduce_members(members, type_id), {
+            "source_files": sorted(set(ctrl_info.get("source_files", []) + ens_info.get("source_files", []))),
+            "source_variables": [variable.ogd_variable],
+            "mode": type_id,
+            "display_offset_hours": ctrl_display_offset,
+        }
 
     @staticmethod
     def _check_ensemble_member_count(
@@ -651,7 +932,7 @@ class ForecastStore:
         reference_iso: str,
         lead_hour: int,
         perturbed: bool = False,
-    ) -> Tuple[np.ndarray, str]:
+    ) -> Tuple[np.ndarray, str, int, Dict[str, object]]:
         request = ogd_api.Request(
             collection=ogd_collection,
             variable=ogd_variable,
@@ -668,7 +949,16 @@ class ForecastStore:
                     data_array = self._load_with_decode_fallbacks(ogd_api, request, exc)
                 field = self._regrid_data_array(data_array).astype(np.float32)
                 units = str(data_array.attrs.get("units", ""))
-                return field, units
+                display_offset = self._extract_display_lead_offset_hours(data_array, int(lead_hour))
+                return (
+                    field,
+                    units,
+                    display_offset,
+                    {
+                        "source_files": self._asset_filenames_for_request(ogd_api, request),
+                        "display_offset_hours": display_offset,
+                    },
+                )
             except Exception as exc:
                 last_exc = exc
                 if attempt >= OGD_FETCH_RETRIES:
@@ -687,7 +977,7 @@ class ForecastStore:
         ogd_variable: str,
         reference_iso: str,
         lead_hour: int,
-    ) -> Tuple[np.ndarray, str]:
+    ) -> Tuple[np.ndarray, str, int, Dict[str, object]]:
         request = ogd_api.Request(
             collection=ogd_collection,
             variable=ogd_variable,
@@ -704,7 +994,16 @@ class ForecastStore:
                     data_array = self._load_with_decode_fallbacks(ogd_api, request, exc)
                 members = self._regrid_member_stack(data_array).astype(np.float32)
                 units = str(data_array.attrs.get("units", ""))
-                return members, units
+                display_offset = self._extract_display_lead_offset_hours(data_array, int(lead_hour))
+                return (
+                    members,
+                    units,
+                    display_offset,
+                    {
+                        "source_files": self._asset_filenames_for_request(ogd_api, request),
+                        "display_offset_hours": display_offset,
+                    },
+                )
             except Exception as exc:
                 last_exc = exc
                 if attempt >= OGD_FETCH_RETRIES:
@@ -773,6 +1072,91 @@ class ForecastStore:
             return result
 
         return result
+
+    @staticmethod
+    def _extract_display_lead_offset_hours(data_array, requested_lead_hour: int) -> int:
+        attrs = dict(getattr(data_array, "attrs", {}) or {})
+
+        def _parse_int_like(value) -> int | None:
+            if value is None:
+                return None
+            if isinstance(value, (int, np.integer)):
+                return int(value)
+            if isinstance(value, float):
+                if np.isfinite(value):
+                    return int(round(value))
+                return None
+            text = str(value).strip()
+            if not text:
+                return None
+            if re.fullmatch(r"-?\d+", text):
+                return int(text)
+            iso_match = re.fullmatch(r"PT(\d+)H", text)
+            if iso_match:
+                return int(iso_match.group(1))
+            return None
+
+        end_step_keys = ("endStep", "end_step", "stepEnd", "step_end")
+        for key in end_step_keys:
+            if key in attrs:
+                end_step = _parse_int_like(attrs.get(key))
+                if end_step is not None:
+                    offset = end_step - int(requested_lead_hour)
+                    if abs(offset) <= 6:
+                        return int(offset)
+
+        step_range_keys = ("stepRange", "step_range")
+        for key in step_range_keys:
+            raw = attrs.get(key)
+            if raw is None:
+                continue
+            text = str(raw).strip()
+            if not text:
+                continue
+            matches = re.findall(r"\d+", text)
+            if matches:
+                end_step = int(matches[-1])
+                offset = end_step - int(requested_lead_hour)
+                if abs(offset) <= 6:
+                    return int(offset)
+
+        # Final fallback: infer from absolute timestamps if present.
+        ref_raw = attrs.get("forecast_reference_time") or attrs.get("reference_time") or attrs.get("reference_datetime")
+        valid_raw = attrs.get("valid_time") or attrs.get("valid_datetime")
+        try:
+            if ref_raw and valid_raw:
+                ref_dt = datetime.fromisoformat(str(ref_raw).replace("Z", "+00:00"))
+                valid_dt = datetime.fromisoformat(str(valid_raw).replace("Z", "+00:00"))
+                if ref_dt.tzinfo is None:
+                    ref_dt = ref_dt.replace(tzinfo=timezone.utc)
+                else:
+                    ref_dt = ref_dt.astimezone(timezone.utc)
+                if valid_dt.tzinfo is None:
+                    valid_dt = valid_dt.replace(tzinfo=timezone.utc)
+                else:
+                    valid_dt = valid_dt.astimezone(timezone.utc)
+                inferred_lead = int(round((valid_dt - ref_dt).total_seconds() / 3600))
+                offset = inferred_lead - int(requested_lead_hour)
+                if abs(offset) <= 6:
+                    return int(offset)
+        except Exception:
+            pass
+
+        return 0
+
+    @staticmethod
+    def _asset_filenames_for_request(ogd_api, request) -> List[str]:
+        try:
+            urls = ogd_api.get_asset_urls(request)
+        except Exception:
+            return []
+        out: List[str] = []
+        for url in urls:
+            path = urlparse(str(url)).path
+            name = Path(path).name
+            if name:
+                out.append(name)
+        return out
 
     def _load_with_decode_fallbacks(self, ogd_api, request, original_error: Exception):
         urls = ogd_api.get_asset_urls(request)

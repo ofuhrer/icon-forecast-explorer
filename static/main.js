@@ -1,5 +1,5 @@
 import { fetchJson } from "/js/api.js";
-import { renderMeteogram as drawMeteogram, seriesHasMissingValues, SERIES_TYPES } from "/js/meteogram.js";
+import { renderMeteogram as drawMeteogram, seriesHasMissingValues, SERIES_TYPES } from "/js/meteogram.js?v=20260225h";
 
 const state = {
   metadata: null,
@@ -37,6 +37,7 @@ const els = {
   meteogramBlock: document.getElementById("meteogramBlock"),
   meteogramPoint: document.getElementById("meteogramPoint"),
   meteogramCanvas: document.getElementById("meteogramCanvas"),
+  fieldDebugInfo: document.getElementById("fieldDebugInfo"),
 };
 
 const map = new maplibregl.Map({
@@ -92,6 +93,12 @@ const prefetchInFlight = new Set();
 const prefetchRecentAt = new Map();
 const PREFETCH_RECENT_TTL_MS = 20_000;
 const HOVER_DEBOUNCE_MS = 180;
+const PREFETCH_AHEAD_COUNT = 1;
+let tileRequestVersion = 0;
+let tileRetryTimer = null;
+let tileRetryBackoffMs = 500;
+let tileUrlNonce = 0;
+let lastHover = null;
 
 async function bootstrap() {
   const initialUrlState = parseUrlState();
@@ -112,10 +119,20 @@ async function bootstrap() {
   map.on("mousemove", onMapMouseMove);
   map.on("click", onMapClick);
   map.on("mouseleave", () => {
+    lastHover = null;
+    if (hoverTimer) {
+      clearTimeout(hoverTimer);
+      hoverTimer = null;
+    }
+    if (abortController) {
+      abortController.abort();
+      abortController = null;
+    }
     tooltip.style.display = "none";
   });
   map.on("dataloading", onMapDataLoading);
   map.on("sourcedata", onMapSourceData);
+  map.on("error", onMapError);
   map.on("moveend", () => {
     updateUrlState();
   });
@@ -332,7 +349,7 @@ function bindEvents() {
     state.lead = state.leadHours[leadIndex] ?? 0;
     updateLeadLabel();
     addOrReplaceWeatherLayer();
-    prefetchUpcomingLeads(2);
+    prefetchUpcomingLeads(PREFETCH_AHEAD_COUNT);
     renderMeteogram();
     updateUrlState();
   });
@@ -361,8 +378,9 @@ function updateLeadLabel() {
     els.validTimeText.textContent = "-";
     return;
   }
-  const validDate = validTimeFromInitAndLead(state.init, state.lead);
-  els.leadText.textContent = `+${state.lead} h`;
+  const displayLead = leadForDisplay(state.lead);
+  const validDate = validTimeFromInitAndLead(state.init, displayLead);
+  els.leadText.textContent = `+${displayLead} h`;
   els.validTimeText.textContent = formatSwissLocal(validDate);
 }
 
@@ -500,11 +518,12 @@ function anyDatasetRefreshing() {
 }
 
 function weatherTileUrl() {
+  const nonce = tileUrlNonce;
   return `/api/tiles/${encodeURIComponent(state.datasetId)}/${encodeURIComponent(
     state.variableId
   )}/${encodeURIComponent(state.init)}/${state.lead}/{z}/{x}/{y}.png?type_id=${encodeURIComponent(
     state.typeId || "control"
-  )}`;
+  )}&_r=${nonce}`;
 }
 
 function addOrReplaceWeatherLayer() {
@@ -515,6 +534,7 @@ function addOrReplaceWeatherLayer() {
     return;
   }
   if (!state.init || state.leadHours.length === 0) {
+    clearTileRetry();
     if (map.getLayer(layerId)) {
       map.removeLayer(layerId);
     }
@@ -522,10 +542,16 @@ function addOrReplaceWeatherLayer() {
       map.removeSource(sourceId);
     }
     setTileLoadingVisible(false);
+    if (els.fieldDebugInfo) {
+      els.fieldDebugInfo.textContent = "";
+    }
     return;
   }
 
+  tileRequestVersion += 1;
+  clearTileRetry();
   setTileLoadingVisible(true);
+  loadFieldDebugInfo(tileRequestVersion);
   const source = map.getSource(sourceId);
   if (!source) {
     map.addSource(sourceId, {
@@ -543,7 +569,7 @@ function addOrReplaceWeatherLayer() {
         "raster-fade-duration": 180,
       },
     });
-    prefetchUpcomingLeads(2);
+    prefetchUpcomingLeads(PREFETCH_AHEAD_COUNT);
     return;
   }
 
@@ -570,7 +596,7 @@ function addOrReplaceWeatherLayer() {
       },
     });
   }
-  prefetchUpcomingLeads(2);
+  prefetchUpcomingLeads(PREFETCH_AHEAD_COUNT);
 }
 
 function onMapDataLoading(event) {
@@ -586,10 +612,52 @@ function onMapSourceData(event) {
   }
   if (event.isSourceLoaded) {
     weatherSourceLoading = false;
+    tileRetryBackoffMs = 500;
+    clearTileRetry();
     setTileLoadingVisible(false);
+    loadFieldDebugInfo(tileRequestVersion);
+    refreshHoverValueIfNeeded();
   } else {
     weatherSourceLoading = true;
     setTileLoadingVisible(true);
+  }
+}
+
+function refreshHoverValueIfNeeded() {
+  if (!lastHover || tooltip.style.display === "none") {
+    return;
+  }
+  requestHoverValue(lastHover.lat, lastHover.lon);
+}
+
+async function requestHoverValue(lat, lon) {
+  if (abortController) {
+    abortController.abort();
+  }
+  abortController = new AbortController();
+  try {
+    const url = `/api/value?dataset_id=${encodeURIComponent(state.datasetId)}&type_id=${encodeURIComponent(
+      state.typeId || "control"
+    )}&variable_id=${encodeURIComponent(state.variableId)}&init=${encodeURIComponent(
+      state.init
+    )}&lead=${state.lead}&lat=${lat}&lon=${lon}`;
+    const data = await fetchJson(url, { signal: abortController.signal });
+    const text = `${data.value.toFixed(2)} ${unitForVariable(state.variableId)}`;
+    tooltip.textContent = text;
+  } catch (err) {
+    if (err.name !== "AbortError") {
+      tooltip.textContent = err.message && err.message.includes("503") ? "Loading..." : "No value";
+    }
+  }
+}
+
+function onMapError(event) {
+  if (!event || event.sourceId !== "weather-source" || !event.error) {
+    return;
+  }
+  const status = Number(event.error.status || event.error.statusCode || event.error?.response?.status);
+  if (status === 503) {
+    scheduleTileRetry();
   }
 }
 
@@ -600,6 +668,78 @@ function setTileLoadingVisible(visible) {
   } else {
     els.tileFetchStatus.textContent = "Tiles idle";
     els.tileFetchStatus.classList.remove("loading");
+  }
+}
+
+function scheduleTileRetry() {
+  if (tileRetryTimer) {
+    return;
+  }
+  const requestVersion = tileRequestVersion;
+  tileRetryTimer = setTimeout(() => {
+    tileRetryTimer = null;
+    if (requestVersion !== tileRequestVersion) {
+      return;
+    }
+    const source = map.getSource("weather-source");
+    if (!source || typeof source.setTiles !== "function") {
+      return;
+    }
+    tileUrlNonce += 1;
+    source.setTiles([weatherTileUrl()]);
+    tileRetryBackoffMs = Math.min(2500, Math.round(tileRetryBackoffMs * 1.4));
+    scheduleTileRetry();
+  }, tileRetryBackoffMs);
+}
+
+function clearTileRetry() {
+  if (tileRetryTimer) {
+    clearTimeout(tileRetryTimer);
+    tileRetryTimer = null;
+  }
+}
+
+async function loadFieldDebugInfo(requestVersion) {
+  if (!els.fieldDebugInfo) {
+    return;
+  }
+  const datasetId = state.datasetId;
+  const typeId = state.typeId || "control";
+  const variableId = state.variableId;
+  const init = state.init;
+  const lead = state.lead;
+  if (!datasetId || !variableId || !init || !Number.isFinite(lead)) {
+    els.fieldDebugInfo.textContent = "";
+    return;
+  }
+  try {
+    const payload = await fetchJson(
+      `/api/field-debug?dataset_id=${encodeURIComponent(datasetId)}&type_id=${encodeURIComponent(
+        typeId
+      )}&variable_id=${encodeURIComponent(variableId)}&init=${encodeURIComponent(init)}&lead=${lead}`,
+      { timeoutMs: 4000 }
+    );
+    if (requestVersion !== tileRequestVersion) {
+      return;
+    }
+    if (payload?.status === "loading" || !payload?.debug) {
+      els.fieldDebugInfo.textContent = "Source: loading...";
+      return;
+    }
+    const files = payload?.debug?.source_files || [];
+    if (files.length === 0) {
+      els.fieldDebugInfo.textContent = "Source: n/a";
+      return;
+    }
+    const preview = files.slice(0, 2).join(", ");
+    const suffix = files.length > 2 ? ` (+${files.length - 2} more)` : "";
+    els.fieldDebugInfo.textContent = `Source: ${preview}${suffix}`;
+  } catch (_err) {
+    if (requestVersion !== tileRequestVersion) {
+      return;
+    }
+    const msg = String(_err?.message || "");
+    els.fieldDebugInfo.textContent = msg.includes("503") ? "Source: loading..." : "Source: unavailable";
   }
 }
 
@@ -659,7 +799,7 @@ function stepAnimation() {
   state.lead = state.leadHours[nextIndex];
   updateLeadLabel();
   addOrReplaceWeatherLayer();
-  prefetchUpcomingLeads(2);
+  prefetchUpcomingLeads(PREFETCH_AHEAD_COUNT);
   renderMeteogram();
   updateUrlState();
 }
@@ -737,7 +877,7 @@ function onLeadKeydown(event) {
   state.lead = state.leadHours[nextIndex];
   updateLeadLabel();
   addOrReplaceWeatherLayer();
-  prefetchUpcomingLeads(2);
+  prefetchUpcomingLeads(PREFETCH_AHEAD_COUNT);
   renderMeteogram();
   updateUrlState();
 }
@@ -750,6 +890,10 @@ function onMapMouseMove(e) {
   tooltip.style.left = `${e.originalEvent.pageX}px`;
   tooltip.style.top = `${e.originalEvent.pageY}px`;
   tooltip.textContent = "Loading...";
+  lastHover = {
+    lat: e.lngLat.lat,
+    lon: e.lngLat.lng,
+  };
 
   if (hoverTimer) {
     clearTimeout(hoverTimer);
@@ -760,28 +904,7 @@ function onMapMouseMove(e) {
       tooltip.textContent = "Loading...";
       return;
     }
-    if (abortController) {
-      abortController.abort();
-    }
-    abortController = new AbortController();
-
-    const lat = e.lngLat.lat;
-    const lon = e.lngLat.lng;
-
-    try {
-      const url = `/api/value?dataset_id=${encodeURIComponent(state.datasetId)}&type_id=${encodeURIComponent(
-        state.typeId || "control"
-      )}&variable_id=${encodeURIComponent(state.variableId)}&init=${encodeURIComponent(
-        state.init
-      )}&lead=${state.lead}&lat=${lat}&lon=${lon}`;
-      const data = await fetchJson(url, { signal: abortController.signal });
-      const text = `${data.value.toFixed(2)} ${unitForVariable(state.variableId)}`;
-      tooltip.textContent = text;
-    } catch (err) {
-      if (err.name !== "AbortError") {
-        tooltip.textContent = "No value";
-      }
-    }
+    await requestHoverValue(lastHover.lat, lastHover.lon);
   }, HOVER_DEBOUNCE_MS);
 }
 
@@ -823,7 +946,6 @@ async function loadSeriesForPinnedPoint() {
     renderMeteogram();
 
     if (seriesHasMissingValues(cachedData, SERIES_TYPES)) {
-      els.meteogramPoint.textContent = `${lat.toFixed(3)}, ${lon.toFixed(3)} (loading full...)`;
       try {
         const fullData = await fetchJson(`${baseUrl}&cached_only=false`, { timeoutMs: 60000 });
         if (requestId !== state.seriesRequestId) {
@@ -850,42 +972,15 @@ async function loadSeriesForPinnedPoint() {
 }
 
 function renderMeteogram(errorText = "") {
-  let statusText = "";
-  if (state.seriesDiagnostics) {
-    const missing = state.seriesDiagnostics.missing_counts || {};
-    const hasMissing = Object.values(missing).some((v) => Number(v) > 0);
-    if (hasMissing) {
-      statusText = "(partial)";
-    }
-    const errors = state.seriesDiagnostics.errors || [];
-    if (errors.length > 0) {
-      statusText = "(partial: backend gaps)";
-    }
-  }
   drawMeteogram({
     canvas: els.meteogramCanvas,
     pointEl: els.meteogramPoint,
     pinnedPoint: state.pinnedPoint,
     seriesData: state.seriesData,
     lead: state.lead,
-    variableRange: selectedVariableRange(),
+    leadLabelOffsetHours: variableLeadDisplayOffsetHours(),
     errorText,
-    statusText,
   });
-}
-
-function selectedVariableRange() {
-  const dataset = state.metadata?.datasets?.find((d) => d.dataset_id === state.datasetId);
-  const variable = dataset?.variables?.find((v) => v.variable_id === state.variableId);
-  if (!variable || !Array.isArray(variable.range) || variable.range.length !== 2) {
-    return null;
-  }
-  const minV = Number(variable.range[0]);
-  const maxV = Number(variable.range[1]);
-  if (!Number.isFinite(minV) || !Number.isFinite(maxV) || maxV <= minV) {
-    return null;
-  }
-  return [minV, maxV];
 }
 
 function parseUrlState() {
@@ -1035,6 +1130,17 @@ function unitForVariable(variableId) {
     return "";
   }
   return variable.unit;
+}
+
+function variableLeadDisplayOffsetHours() {
+  const dataset = state.metadata?.datasets?.find((d) => d.dataset_id === state.datasetId);
+  const variable = dataset?.variables?.find((v) => v.variable_id === state.variableId);
+  const offset = Number(variable?.lead_time_display_offset_hours ?? 0);
+  return Number.isFinite(offset) ? offset : 0;
+}
+
+function leadForDisplay(leadHours) {
+  return Number(leadHours) + variableLeadDisplayOffsetHours();
 }
 
 function formatInit(initStr) {
