@@ -239,7 +239,6 @@ export function renderMeteogram({
   };
 
   drawLine(lines.control, "#1b263b", 1.8, true);
-  drawInlineLegend(ctx, x0 + 4, y1 + 8);
 
   if (lead != null && leads.includes(lead)) {
     const x = xAt(lead);
@@ -338,30 +337,4 @@ function chooseTickIndices(count, maxTicks) {
   }
   indices.push(count - 1);
   return Array.from(new Set(indices)).sort((a, b) => a - b);
-}
-
-function drawInlineLegend(ctx, x, y) {
-  ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
-  ctx.fillRect(x, y, 110, 24);
-  ctx.strokeStyle = "#d7dde5";
-  ctx.strokeRect(x, y, 110, 24);
-
-  ctx.fillStyle = "rgba(66, 133, 244, 0.18)";
-  ctx.fillRect(x + 6, y + 5, 16, 7);
-  ctx.fillStyle = "#54667a";
-  ctx.font = "9px IBM Plex Sans, Segoe UI, sans-serif";
-  ctx.fillText("10-90% range", x + 26, y + 11);
-
-  ctx.strokeStyle = "#1b263b";
-  ctx.lineWidth = 1.8;
-  ctx.beginPath();
-  ctx.moveTo(x + 6, y + 17);
-  ctx.lineTo(x + 22, y + 17);
-  ctx.stroke();
-  ctx.fillStyle = "#1b263b";
-  ctx.beginPath();
-  ctx.arc(x + 14, y + 17, 1.7, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = "#54667a";
-  ctx.fillText("CTRL", x + 26, y + 20);
 }
