@@ -984,10 +984,27 @@ class ForecastStore:
             neighbor_count = np.zeros_like(result, dtype=np.int16)
 
             for dy, dx in [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1)]:
-                shifted = np.roll(np.roll(result, dy, axis=0), dx, axis=1)
-                finite = np.isfinite(shifted)
-                neighbor_sum[finite] += shifted[finite]
-                neighbor_count[finite] += 1
+                if dy >= 0:
+                    src_y = slice(0, result.shape[0] - dy)
+                    dst_y = slice(dy, result.shape[0])
+                else:
+                    src_y = slice(-dy, result.shape[0])
+                    dst_y = slice(0, result.shape[0] + dy)
+                if dx >= 0:
+                    src_x = slice(0, result.shape[1] - dx)
+                    dst_x = slice(dx, result.shape[1])
+                else:
+                    src_x = slice(-dx, result.shape[1])
+                    dst_x = slice(0, result.shape[1] + dx)
+
+                neighbor = result[src_y, src_x]
+                finite = np.isfinite(neighbor)
+                if not np.any(finite):
+                    continue
+                dst_sum = neighbor_sum[dst_y, dst_x]
+                dst_count = neighbor_count[dst_y, dst_x]
+                dst_sum[finite] += neighbor[finite]
+                dst_count[finite] += 1
 
             fillable = nan_mask & (neighbor_count > 0)
             result[fillable] = neighbor_sum[fillable] / neighbor_count[fillable]
@@ -1035,6 +1052,10 @@ class ForecastStore:
             fetched_dt = datetime.fromisoformat(fetched_at)
         except ValueError:
             return None
+        if fetched_dt.tzinfo is None:
+            fetched_dt = fetched_dt.replace(tzinfo=timezone.utc)
+        else:
+            fetched_dt = fetched_dt.astimezone(timezone.utc)
 
         if datetime.now(timezone.utc) - fetched_dt > timedelta(minutes=20):
             return None
@@ -1279,6 +1300,16 @@ class ForecastStore:
 
         for key in drop_keys:
             self._field_cache.pop(key, None)
+        self._prune_stale_key_locks()
+
+    def _prune_stale_key_locks(self) -> None:
+        with self._key_locks_guard:
+            if len(self._key_locks) <= max(128, len(self._field_cache) * 2):
+                return
+            active_keys = set(self._field_cache.keys())
+            stale = [key for key in self._key_locks.keys() if key not in active_keys]
+            for key in stale:
+                self._key_locks.pop(key, None)
 
     def _parse_field_cache_filename(self, filename: str) -> Tuple[str, str, str] | None:
         if not filename.endswith(".npz"):

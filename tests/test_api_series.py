@@ -60,6 +60,7 @@ class ApiSeriesTests(unittest.TestCase):
     def setUp(self):
         if app_module is not None:
             app_module._SERIES_CACHE.clear()
+            app_module._SERIES_KEY_LOCKS.clear()
 
     @unittest.skipIf(app_module is None, "fastapi app dependencies not available in current interpreter")
     def test_series_reports_diagnostics_cached_only(self):
@@ -191,6 +192,16 @@ class ApiSeriesTests(unittest.TestCase):
         self.assertFalse(payload1["diagnostics"]["cache_hit"])
         self.assertTrue(payload2["diagnostics"]["cache_hit"])
         self.assertEqual(counting_store.calls, 2)
+
+    @unittest.skipIf(app_module is None, "fastapi app dependencies not available in current interpreter")
+    def test_series_key_locks_are_pruned(self):
+        with patch.object(app_module, "SERIES_CACHE_MAX_ENTRIES", 1):
+            for i in range(70):
+                key = ("d", "v", "i", ("control",), True, i, i)
+                app_module._series_key_lock(key)
+            keep_key = ("d", "v", "i", ("control",), True, 0, 0)
+            app_module._series_cache_put(keep_key, {"ok": True})
+        self.assertLessEqual(len(app_module._SERIES_KEY_LOCKS), 64)
 
 
 if __name__ == "__main__":

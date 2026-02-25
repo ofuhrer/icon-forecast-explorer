@@ -460,7 +460,7 @@ function renderLegend() {
 
   const minValue = legend.thresholds[0];
   const maxValue = legend.thresholds[legend.thresholds.length - 1];
-  els.legendLabels.innerHTML = `<span>&le; ${minValue.toFixed(0)} ${variable.unit}</span><span>&ge; ${maxValue.toFixed(0)} ${variable.unit}</span>`;
+  els.legendLabels.innerHTML = `<span>&le; ${formatLegendValue(minValue)} ${variable.unit}</span><span>&ge; ${formatLegendValue(maxValue)} ${variable.unit}</span>`;
 }
 
 function renderRefreshStatus() {
@@ -868,9 +868,24 @@ function renderMeteogram(errorText = "") {
     pinnedPoint: state.pinnedPoint,
     seriesData: state.seriesData,
     lead: state.lead,
+    variableRange: selectedVariableRange(),
     errorText,
     statusText,
   });
+}
+
+function selectedVariableRange() {
+  const dataset = state.metadata?.datasets?.find((d) => d.dataset_id === state.datasetId);
+  const variable = dataset?.variables?.find((v) => v.variable_id === state.variableId);
+  if (!variable || !Array.isArray(variable.range) || variable.range.length !== 2) {
+    return null;
+  }
+  const minV = Number(variable.range[0]);
+  const maxV = Number(variable.range[1]);
+  if (!Number.isFinite(minV) || !Number.isFinite(maxV) || maxV <= minV) {
+    return null;
+  }
+  return [minV, maxV];
 }
 
 function parseUrlState() {
@@ -1061,6 +1076,23 @@ function formatSwissLocal(date) {
     hour12: false,
   }).format(date);
   return `${weekday} ${datePart} ${timePart}`;
+}
+
+function formatLegendValue(value) {
+  if (!Number.isFinite(value)) {
+    return "-";
+  }
+  const abs = Math.abs(value);
+  let decimals = 0;
+  if (abs < 1) {
+    decimals = 2;
+  } else if (abs < 10) {
+    decimals = 1;
+  }
+  return value
+    .toFixed(decimals)
+    .replace(/\.0+$/, "")
+    .replace(/(\.\d*[1-9])0+$/, "$1");
 }
 
 bootstrap().catch((err) => {

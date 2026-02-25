@@ -24,6 +24,7 @@ export function renderMeteogram({
   pinnedPoint,
   seriesData,
   lead,
+  variableRange = null,
   errorText = "",
   statusText = "",
 }) {
@@ -95,9 +96,7 @@ export function renderMeteogram({
   const x1 = w - padR;
   const y1 = h - padB;
 
-  const rawMin = Math.min(...all);
-  const rawMax = Math.max(...all);
-  const scale = computeNiceScale(rawMin, rawMax, 5);
+  const scale = computeMeteogramScale(all, variableRange);
   const minV = scale.min;
   const maxV = scale.max;
   const tickStep = scale.step;
@@ -295,6 +294,69 @@ function computeNiceScale(min, max, desiredTicks = 5) {
   const niceMin = Math.floor(min / step) * step;
   const niceMax = Math.ceil(max / step) * step;
   return { min: niceMin, max: niceMax, step };
+}
+
+function computeMeteogramScale(allValues, variableRange) {
+  const sorted = allValues
+    .filter((v) => Number.isFinite(v))
+    .slice()
+    .sort((a, b) => a - b);
+  if (sorted.length === 0) {
+    return { min: 0, max: 1, step: 0.2 };
+  }
+  const rawMin = sorted[0];
+  const rawMax = sorted[sorted.length - 1];
+  let workMin = rawMin;
+  let workMax = rawMax;
+
+  if (sorted.length >= 6) {
+    const q02 = quantileSorted(sorted, 0.02);
+    const q98 = quantileSorted(sorted, 0.98);
+    if (Number.isFinite(q02) && Number.isFinite(q98) && q98 > q02) {
+      workMin = q02;
+      workMax = q98;
+    }
+  }
+
+  const range = workMax - workMin;
+  const pad = range > 0 ? range * 0.08 : 1;
+  workMin -= pad;
+  workMax += pad;
+
+  if (Array.isArray(variableRange) && variableRange.length === 2) {
+    const boundMin = Number(variableRange[0]);
+    const boundMax = Number(variableRange[1]);
+    if (Number.isFinite(boundMin) && Number.isFinite(boundMax) && boundMax > boundMin) {
+      workMin = Math.max(workMin, boundMin);
+      workMax = Math.min(workMax, boundMax);
+      if (!(workMax > workMin)) {
+        workMin = boundMin;
+        workMax = boundMax;
+      }
+    }
+  }
+
+  return computeNiceScale(workMin, workMax, 5);
+}
+
+function quantileSorted(sorted, q) {
+  if (!sorted.length) {
+    return NaN;
+  }
+  if (q <= 0) {
+    return sorted[0];
+  }
+  if (q >= 1) {
+    return sorted[sorted.length - 1];
+  }
+  const pos = (sorted.length - 1) * q;
+  const lo = Math.floor(pos);
+  const hi = Math.ceil(pos);
+  if (lo === hi) {
+    return sorted[lo];
+  }
+  const frac = pos - lo;
+  return sorted[lo] * (1 - frac) + sorted[hi] * frac;
 }
 
 function niceNumber(value, round) {

@@ -390,6 +390,7 @@ def _series_cache_get(key: tuple) -> Dict[str, object] | None:
         ts, payload = item
         if now - ts > SERIES_CACHE_TTL_SECONDS:
             _SERIES_CACHE.pop(key, None)
+            _series_prune_orphan_locks()
             return None
         return payload
 
@@ -399,9 +400,11 @@ def _series_cache_put(key: tuple, payload: Dict[str, object]) -> None:
     with _SERIES_CACHE_GUARD:
         _SERIES_CACHE[key] = (now, payload)
         if len(_SERIES_CACHE) <= SERIES_CACHE_MAX_ENTRIES:
+            _series_prune_orphan_locks()
             return
         oldest_key = min(_SERIES_CACHE.items(), key=lambda kv: kv[1][0])[0]
         _SERIES_CACHE.pop(oldest_key, None)
+        _series_prune_orphan_locks()
 
 
 def _series_key_lock(key: tuple) -> threading.Lock:
@@ -411,6 +414,17 @@ def _series_key_lock(key: tuple) -> threading.Lock:
             lock = threading.Lock()
             _SERIES_KEY_LOCKS[key] = lock
         return lock
+
+
+def _series_prune_orphan_locks() -> None:
+    # Keep lock map bounded by dropping locks that no longer have cache entries.
+    with _SERIES_KEY_LOCKS_GUARD:
+        if len(_SERIES_KEY_LOCKS) <= max(64, SERIES_CACHE_MAX_ENTRIES * 2):
+            return
+        active_keys = set(_SERIES_CACHE.keys())
+        stale = [k for k in _SERIES_KEY_LOCKS.keys() if k not in active_keys]
+        for key in stale:
+            _SERIES_KEY_LOCKS.pop(key, None)
 
 
 def _series_payload_for_request(payload: Dict[str, object], lat: float, lon: float, cache_hit: bool) -> Dict[str, object]:
