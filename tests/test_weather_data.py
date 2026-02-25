@@ -55,6 +55,35 @@ class WeatherDataTests(unittest.TestCase):
         merged = store._merge_catalogs(cfg, cached, discovered)
         self.assertEqual(merged, cached)
 
+    def test_cached_field_returns_none_for_unknown_lead_in_known_init(self):
+        store = ForecastStore()
+        dataset_id = "icon-ch1-eps-control"
+        init = store.init_times(dataset_id)[0]
+        bad_lead = 9999
+
+        with patch.object(store, "refresh_catalog", wraps=store.refresh_catalog) as mocked_refresh:
+            result = store.get_cached_field(
+                dataset_id=dataset_id,
+                variable_id="t_2m",
+                init_str=init,
+                lead_hour=bad_lead,
+                type_id="control",
+            )
+        self.assertIsNone(result)
+        mocked_refresh.assert_not_called()
+
+    def test_cached_field_rejects_invalid_variable(self):
+        store = ForecastStore()
+        init = store.init_times("icon-ch1-eps-control")[0]
+        with self.assertRaises(ValueError):
+            store.get_cached_field(
+                dataset_id="icon-ch1-eps-control",
+                variable_id="does_not_exist",
+                init_str=init,
+                lead_hour=0,
+                type_id="control",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -145,7 +145,27 @@ export function renderMeteogram({
 
   const p10 = lines.p10;
   const p90 = lines.p90;
-  if (p10.length === leads.length && p90.length === leads.length) {
+  const control = lines.control;
+  const controlIndices = [];
+  for (let i = 0; i < leads.length; i += 1) {
+    const cv = control[i];
+    if (cv != null && Number.isFinite(Number(cv))) {
+      controlIndices.push(i);
+    }
+  }
+  const hasFullBandForControl =
+    controlIndices.length > 0 &&
+    p10.length === leads.length &&
+    p90.length === leads.length &&
+    controlIndices.every(
+      (i) =>
+        p10[i] != null &&
+        p90[i] != null &&
+        Number.isFinite(Number(p10[i])) &&
+        Number.isFinite(Number(p90[i]))
+    );
+
+  if (hasFullBandForControl) {
     ctx.beginPath();
     let started = false;
     for (let i = 0; i < leads.length; i += 1) {
@@ -178,7 +198,7 @@ export function renderMeteogram({
     }
   }
 
-  const drawLine = (arr, color, width = 1.4) => {
+  const drawLine = (arr, color, width = 1.4, drawPoints = false) => {
     if (!arr || arr.length === 0) {
       return;
     }
@@ -204,18 +224,18 @@ export function renderMeteogram({
       ctx.strokeStyle = color;
       ctx.lineWidth = width;
       ctx.stroke();
-      ctx.fillStyle = color;
-      for (const p of points) {
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 1.9, 0, Math.PI * 2);
-        ctx.fill();
+      if (drawPoints) {
+        ctx.fillStyle = color;
+        for (const p of points) {
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, 1.9, 0, Math.PI * 2);
+          ctx.fill();
+        }
       }
     }
   };
 
-  drawLine(lines.p10, "#4f6fa0", 1.2);
-  drawLine(lines.p90, "#4f6fa0", 1.2);
-  drawLine(lines.control, "#1b263b", 1.8);
+  drawLine(lines.control, "#1b263b", 1.8, true);
 
   if (lead != null && leads.includes(lead)) {
     const x = xAt(lead);

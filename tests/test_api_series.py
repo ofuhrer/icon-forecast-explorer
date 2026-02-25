@@ -24,6 +24,22 @@ class _FakeStore:
         return 10.0 + lead
 
 
+class _ErrorStore:
+    def lead_hours_for_init(self, dataset_id, init):
+        return [0, 1, 2]
+
+    def get_cached_value(self, dataset_id, variable_id, init, lead, lat, lon, type_id="control"):
+        raise RuntimeError(f"cached fail {type_id} {lead}")
+
+    def get_value(self, dataset_id, variable_id, init, lead, lat, lon, type_id="control"):
+        raise RuntimeError(f"full fail {type_id} {lead}")
+
+
+class _NoLeadStore:
+    def lead_hours_for_init(self, dataset_id, init):
+        return []
+
+
 class ApiSeriesTests(unittest.TestCase):
     @unittest.skipIf(app_module is None, "fastapi app dependencies not available in current interpreter")
     def test_series_reports_diagnostics_cached_only(self):
@@ -62,6 +78,73 @@ class ApiSeriesTests(unittest.TestCase):
         self.assertFalse(diagnostics["cached_only"])
         self.assertGreaterEqual(diagnostics["error_count"], 1)
         self.assertGreaterEqual(diagnostics["missing_counts"]["control"], 1)
+
+    @unittest.skipIf(app_module is None, "fastapi app dependencies not available in current interpreter")
+    def test_series_truncates_error_list(self):
+        with patch.object(app_module, "store", _ErrorStore()):
+            payload = app_module.series(
+                dataset_id="icon-ch1-eps-control",
+                variable_id="t_2m",
+                init="2026022500",
+                lat=47.0,
+                lon=8.0,
+                types="control,p10,p90",
+                cached_only=True,
+            )
+
+        diagnostics = payload["diagnostics"]
+        self.assertEqual(diagnostics["error_count"], 9)
+        self.assertEqual(len(diagnostics["errors"]), 9)
+        self.assertEqual(diagnostics["missing_counts"]["control"], 3)
+        self.assertEqual(diagnostics["missing_counts"]["p10"], 3)
+        self.assertEqual(diagnostics["missing_counts"]["p90"], 3)
+
+    @unittest.skipIf(app_module is None, "fastapi app dependencies not available in current interpreter")
+    def test_series_uses_default_type_when_types_empty(self):
+        with patch.object(app_module, "store", _FakeStore()):
+            payload = app_module.series(
+                dataset_id="icon-ch1-eps-control",
+                variable_id="t_2m",
+                init="2026022500",
+                lat=47.0,
+                lon=8.0,
+                types="   ",
+                cached_only=True,
+            )
+        self.assertIn("control", payload["values"])
+        self.assertEqual(list(payload["values"].keys()), ["control"])
+
+    @unittest.skipIf(app_module is None, "fastapi app dependencies not available in current interpreter")
+    def test_series_rejects_invalid_init_format(self):
+        with patch.object(app_module, "store", _FakeStore()):
+            with self.assertRaises(app_module.HTTPException) as ctx:
+                app_module.series(
+                    dataset_id="icon-ch1-eps-control",
+                    variable_id="t_2m",
+                    init="not-an-init",
+                    lat=47.0,
+                    lon=8.0,
+                    types="control",
+                    cached_only=True,
+                )
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("Invalid init format", str(ctx.exception.detail))
+
+    @unittest.skipIf(app_module is None, "fastapi app dependencies not available in current interpreter")
+    def test_series_rejects_when_no_leads_available(self):
+        with patch.object(app_module, "store", _NoLeadStore()):
+            with self.assertRaises(app_module.HTTPException) as ctx:
+                app_module.series(
+                    dataset_id="icon-ch1-eps-control",
+                    variable_id="t_2m",
+                    init="2026022500",
+                    lat=47.0,
+                    lon=8.0,
+                    types="control",
+                    cached_only=True,
+                )
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("No leads available", str(ctx.exception.detail))
 
 
 if __name__ == "__main__":
