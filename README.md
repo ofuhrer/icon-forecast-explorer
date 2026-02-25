@@ -1,6 +1,6 @@
 # ICON Forecast Explorer
 
-Interactive web app for Swiss ICON forecasts (map + meteogram).
+Interactive web app for visualizing MeteoSwiss' ICON forecast.
 
 ![ICON Forecast Explorer screenshot](docs/screenshot.png)
 
