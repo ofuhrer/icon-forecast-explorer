@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from io import BytesIO
 import json
+import os
+import threading
+import time
 from pathlib import Path
 from typing import Dict, List
 from datetime import datetime, timedelta, timezone
@@ -17,12 +20,31 @@ from weather_data import SWISS_BOUNDS, ForecastStore
 
 TILE_SIZE = 256
 COLORMAP_MANIFEST_PATH = Path(__file__).resolve().parent / "colormaps" / "manifest.json"
+SERIES_CACHE_TTL_SECONDS = float(os.getenv("SERIES_CACHE_TTL_SECONDS", "120"))
+SERIES_CACHE_MAX_ENTRIES = int(os.getenv("SERIES_CACHE_MAX_ENTRIES", "512"))
+SERIES_LATLON_BUCKET_DEG = float(os.getenv("SERIES_LATLON_BUCKET_DEG", "0.01"))
 
 
 app = FastAPI(title="ICON Forecast Explorer")
+
+
+def _allowed_cors_origins() -> List[str]:
+    if os.getenv("ICON_EXPLORER_ALLOW_ALL_CORS", "").strip() == "1":
+        return ["*"]
+    raw = os.getenv("CORS_ALLOW_ORIGINS", "").strip()
+    if raw:
+        return [v.strip() for v in raw.split(",") if v.strip()]
+    return [
+        "http://127.0.0.1:8000",
+        "http://localhost:8000",
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+    ]
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_allowed_cors_origins(),
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -37,6 +59,11 @@ FORECAST_TYPES = [
     {"type_id": "p10", "display_name": "10% Percentile"},
     {"type_id": "p90", "display_name": "90% Percentile"},
 ]
+FORECAST_TYPE_IDS = {item["type_id"] for item in FORECAST_TYPES}
+_SERIES_CACHE: Dict[tuple, tuple[float, Dict[str, object]]] = {}
+_SERIES_CACHE_GUARD = threading.Lock()
+_SERIES_KEY_LOCKS: Dict[tuple, threading.Lock] = {}
+_SERIES_KEY_LOCKS_GUARD = threading.Lock()
 
 
 @app.on_event("startup")
@@ -153,67 +180,34 @@ def series(
     types: str = Query("control,mean,median,p10,p90"),
     cached_only: bool = Query(True),
 ) -> Dict[str, object]:
-    leads = store.lead_hours_for_init(dataset_id, init)
-    if not leads:
-        raise HTTPException(status_code=400, detail=f"No leads available for init {init}")
-
     req_types: List[str] = [t.strip() for t in types.split(",") if t.strip()]
     if not req_types:
         req_types = ["control"]
+    unknown_types = [t for t in req_types if t not in FORECAST_TYPE_IDS]
+    if unknown_types:
+        raise HTTPException(status_code=400, detail=f"Unknown type_id values: {', '.join(unknown_types)}")
 
-    try:
-        base_dt = datetime.strptime(init, "%Y%m%d%H").replace(tzinfo=timezone.utc)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid init format: {init}") from exc
+    key = _series_cache_key(dataset_id, variable_id, init, req_types, cached_only, lat, lon)
+    cached_payload = _series_cache_get(key)
+    if cached_payload is not None:
+        return _series_payload_for_request(cached_payload, lat=lat, lon=lon, cache_hit=True)
 
-    values_by_type: Dict[str, List[float | None]] = {t: [] for t in req_types}
-    missing_counts: Dict[str, int] = {t: 0 for t in req_types}
-    errors: List[Dict[str, object]] = []
-    for lead in leads:
-        for t in req_types:
-            try:
-                if cached_only:
-                    v = store.get_cached_value(
-                        dataset_id, variable_id, init, lead, lat=lat, lon=lon, type_id=t
-                    )
-                else:
-                    v = store.get_value(dataset_id, variable_id, init, lead, lat=lat, lon=lon, type_id=t)
-                if v is None:
-                    missing_counts[t] += 1
-                    values_by_type[t].append(None)
-                else:
-                    values_by_type[t].append(round(float(v), 2))
-            except (RuntimeError, ValueError) as exc:
-                missing_counts[t] += 1
-                values_by_type[t].append(None)
-                errors.append(
-                    {
-                        "type_id": t,
-                        "lead_hour": int(lead),
-                        "message": str(exc),
-                    }
-                )
-
-    valid_times_utc = [
-        (base_dt + timedelta(hours=int(lead))).strftime("%Y-%m-%dT%H:%M:%SZ")
-        for lead in leads
-    ]
-    return {
-        "dataset_id": dataset_id,
-        "variable_id": variable_id,
-        "init": init,
-        "lat": lat,
-        "lon": lon,
-        "lead_hours": [int(v) for v in leads],
-        "valid_times_utc": valid_times_utc,
-        "values": values_by_type,
-        "diagnostics": {
-            "cached_only": cached_only,
-            "missing_counts": missing_counts,
-            "errors": errors[:25],
-            "error_count": len(errors),
-        },
-    }
+    key_lock = _series_key_lock(key)
+    with key_lock:
+        cached_payload = _series_cache_get(key)
+        if cached_payload is not None:
+            return _series_payload_for_request(cached_payload, lat=lat, lon=lon, cache_hit=True)
+        payload = _build_series_payload(
+            dataset_id=dataset_id,
+            variable_id=variable_id,
+            init=init,
+            lat=lat,
+            lon=lon,
+            req_types=req_types,
+            cached_only=cached_only,
+        )
+        _series_cache_put(key, payload)
+        return _series_payload_for_request(payload, lat=lat, lon=lon, cache_hit=False)
 
 
 @app.get("/api/tiles/{dataset_id}/{variable_id}/{init}/{lead}/{z}/{x}/{y}.png")
@@ -361,3 +355,135 @@ def _load_project_colormaps(path: Path) -> tuple[Dict[str, Dict[str, object]], D
 
 
 COLORMAP_REGISTRY, VARIABLE_TO_COLORMAP = _load_project_colormaps(COLORMAP_MANIFEST_PATH)
+
+
+def _bucket_coord(value: float) -> float:
+    return round(value / SERIES_LATLON_BUCKET_DEG) * SERIES_LATLON_BUCKET_DEG
+
+
+def _series_cache_key(
+    dataset_id: str,
+    variable_id: str,
+    init: str,
+    req_types: List[str],
+    cached_only: bool,
+    lat: float,
+    lon: float,
+) -> tuple:
+    return (
+        dataset_id,
+        variable_id,
+        init,
+        tuple(req_types),
+        bool(cached_only),
+        _bucket_coord(lat),
+        _bucket_coord(lon),
+    )
+
+
+def _series_cache_get(key: tuple) -> Dict[str, object] | None:
+    now = time.monotonic()
+    with _SERIES_CACHE_GUARD:
+        item = _SERIES_CACHE.get(key)
+        if item is None:
+            return None
+        ts, payload = item
+        if now - ts > SERIES_CACHE_TTL_SECONDS:
+            _SERIES_CACHE.pop(key, None)
+            return None
+        return payload
+
+
+def _series_cache_put(key: tuple, payload: Dict[str, object]) -> None:
+    now = time.monotonic()
+    with _SERIES_CACHE_GUARD:
+        _SERIES_CACHE[key] = (now, payload)
+        if len(_SERIES_CACHE) <= SERIES_CACHE_MAX_ENTRIES:
+            return
+        oldest_key = min(_SERIES_CACHE.items(), key=lambda kv: kv[1][0])[0]
+        _SERIES_CACHE.pop(oldest_key, None)
+
+
+def _series_key_lock(key: tuple) -> threading.Lock:
+    with _SERIES_KEY_LOCKS_GUARD:
+        lock = _SERIES_KEY_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _SERIES_KEY_LOCKS[key] = lock
+        return lock
+
+
+def _series_payload_for_request(payload: Dict[str, object], lat: float, lon: float, cache_hit: bool) -> Dict[str, object]:
+    out = dict(payload)
+    out["lat"] = lat
+    out["lon"] = lon
+    diag = dict(out.get("diagnostics", {}))
+    diag["cache_hit"] = bool(cache_hit)
+    out["diagnostics"] = diag
+    return out
+
+
+def _build_series_payload(
+    dataset_id: str,
+    variable_id: str,
+    init: str,
+    lat: float,
+    lon: float,
+    req_types: List[str],
+    cached_only: bool,
+) -> Dict[str, object]:
+    leads = store.lead_hours_for_init(dataset_id, init)
+    if not leads:
+        raise HTTPException(status_code=400, detail=f"No leads available for init {init}")
+    try:
+        base_dt = datetime.strptime(init, "%Y%m%d%H").replace(tzinfo=timezone.utc)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid init format: {init}") from exc
+
+    values_by_type: Dict[str, List[float | None]] = {t: [] for t in req_types}
+    missing_counts: Dict[str, int] = {t: 0 for t in req_types}
+    errors: List[Dict[str, object]] = []
+    for lead in leads:
+        for t in req_types:
+            try:
+                if cached_only:
+                    v = store.get_cached_value(
+                        dataset_id, variable_id, init, lead, lat=lat, lon=lon, type_id=t
+                    )
+                else:
+                    v = store.get_value(dataset_id, variable_id, init, lead, lat=lat, lon=lon, type_id=t)
+                if v is None:
+                    missing_counts[t] += 1
+                    values_by_type[t].append(None)
+                else:
+                    values_by_type[t].append(round(float(v), 2))
+            except (RuntimeError, ValueError) as exc:
+                missing_counts[t] += 1
+                values_by_type[t].append(None)
+                errors.append(
+                    {
+                        "type_id": t,
+                        "lead_hour": int(lead),
+                        "message": str(exc),
+                    }
+                )
+    valid_times_utc = [
+        (base_dt + timedelta(hours=int(lead))).strftime("%Y-%m-%dT%H:%M:%SZ")
+        for lead in leads
+    ]
+    return {
+        "dataset_id": dataset_id,
+        "variable_id": variable_id,
+        "init": init,
+        "lat": lat,
+        "lon": lon,
+        "lead_hours": [int(v) for v in leads],
+        "valid_times_utc": valid_times_utc,
+        "values": values_by_type,
+        "diagnostics": {
+            "cached_only": cached_only,
+            "missing_counts": missing_counts,
+            "errors": errors[:25],
+            "error_count": len(errors),
+        },
+    }

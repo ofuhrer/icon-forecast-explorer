@@ -5,6 +5,7 @@ import os
 import re
 import threading
 import sys
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -31,6 +32,20 @@ HOT_PREWARM_INTERVAL_SECONDS = 300
 HOT_PREWARM_VARIABLES = ("t_2m", "wind_speed_10m", "tot_prec")
 HOT_PREWARM_TYPES = ("control", "mean")
 HOT_PREWARM_LEADS = (0, 6, 12)
+OGD_FETCH_RETRIES = 3
+OGD_FETCH_BASE_BACKOFF_SECONDS = 0.4
+
+
+class OGDIngestionError(RuntimeError):
+    """Base class for OGD ingestion failures."""
+
+
+class OGDRequestError(OGDIngestionError):
+    """Raised when data retrieval from OGD fails."""
+
+
+class OGDDecodeError(OGDIngestionError):
+    """Raised when a fetched OGD payload cannot be decoded."""
 
 
 @dataclass(frozen=True)
@@ -637,26 +652,33 @@ class ForecastStore:
         lead_hour: int,
         perturbed: bool = False,
     ) -> Tuple[np.ndarray, str]:
-        try:
-            request = ogd_api.Request(
-                collection=ogd_collection,
-                variable=ogd_variable,
-                reference_datetime=reference_iso,
-                perturbed=perturbed,
-                horizon=timedelta(hours=int(lead_hour)),
-            )
+        request = ogd_api.Request(
+            collection=ogd_collection,
+            variable=ogd_variable,
+            reference_datetime=reference_iso,
+            perturbed=perturbed,
+            horizon=timedelta(hours=int(lead_hour)),
+        )
+        last_exc: Exception | None = None
+        for attempt in range(1, OGD_FETCH_RETRIES + 1):
             try:
-                data_array = ogd_api.get_from_ogd(request)
-            except KeyError as exc:
-                data_array = self._load_with_decode_fallbacks(ogd_api, request, exc)
-        except Exception as exc:
-            raise RuntimeError(
-                f"OGD fetch failed for variable={ogd_variable} ref={reference_iso} lead={lead_hour}: {exc}"
-            ) from exc
+                try:
+                    data_array = ogd_api.get_from_ogd(request)
+                except KeyError as exc:
+                    data_array = self._load_with_decode_fallbacks(ogd_api, request, exc)
+                field = self._regrid_data_array(data_array).astype(np.float32)
+                units = str(data_array.attrs.get("units", ""))
+                return field, units
+            except Exception as exc:
+                last_exc = exc
+                if attempt >= OGD_FETCH_RETRIES:
+                    break
+                time.sleep(OGD_FETCH_BASE_BACKOFF_SECONDS * (2 ** (attempt - 1)))
 
-        field = self._regrid_data_array(data_array).astype(np.float32)
-        units = str(data_array.attrs.get("units", ""))
-        return field, units
+        raise OGDRequestError(
+            f"OGD fetch failed for variable={ogd_variable} ref={reference_iso} lead={lead_hour} "
+            f"after {OGD_FETCH_RETRIES} attempts: {last_exc}"
+        ) from last_exc
 
     def _fetch_direct_member_stack(
         self,
@@ -666,26 +688,33 @@ class ForecastStore:
         reference_iso: str,
         lead_hour: int,
     ) -> Tuple[np.ndarray, str]:
-        try:
-            request = ogd_api.Request(
-                collection=ogd_collection,
-                variable=ogd_variable,
-                reference_datetime=reference_iso,
-                perturbed=True,
-                horizon=timedelta(hours=int(lead_hour)),
-            )
+        request = ogd_api.Request(
+            collection=ogd_collection,
+            variable=ogd_variable,
+            reference_datetime=reference_iso,
+            perturbed=True,
+            horizon=timedelta(hours=int(lead_hour)),
+        )
+        last_exc: Exception | None = None
+        for attempt in range(1, OGD_FETCH_RETRIES + 1):
             try:
-                data_array = ogd_api.get_from_ogd(request)
-            except KeyError as exc:
-                data_array = self._load_with_decode_fallbacks(ogd_api, request, exc)
-        except Exception as exc:
-            raise RuntimeError(
-                f"OGD ensemble fetch failed for variable={ogd_variable} ref={reference_iso} lead={lead_hour}: {exc}"
-            ) from exc
+                try:
+                    data_array = ogd_api.get_from_ogd(request)
+                except KeyError as exc:
+                    data_array = self._load_with_decode_fallbacks(ogd_api, request, exc)
+                members = self._regrid_member_stack(data_array).astype(np.float32)
+                units = str(data_array.attrs.get("units", ""))
+                return members, units
+            except Exception as exc:
+                last_exc = exc
+                if attempt >= OGD_FETCH_RETRIES:
+                    break
+                time.sleep(OGD_FETCH_BASE_BACKOFF_SECONDS * (2 ** (attempt - 1)))
 
-        members = self._regrid_member_stack(data_array).astype(np.float32)
-        units = str(data_array.attrs.get("units", ""))
-        return members, units
+        raise OGDRequestError(
+            f"OGD ensemble fetch failed for variable={ogd_variable} ref={reference_iso} lead={lead_hour} "
+            f"after {OGD_FETCH_RETRIES} attempts: {last_exc}"
+        ) from last_exc
 
     @staticmethod
     def _reduce_members(members: np.ndarray, type_id: str) -> np.ndarray:
@@ -762,10 +791,10 @@ class ForecastStore:
         try:
             result = ogd_api.grib_decoder.load(source, {}, geo_coords=geo_coords)
         except Exception as exc:
-            raise RuntimeError(f"Failed to decode OGD asset for variable {request.variable}: {exc}") from exc
+            raise OGDDecodeError(f"Failed to decode OGD asset for variable {request.variable}: {exc}") from exc
 
         if not result:
-            raise RuntimeError(f"Decoded OGD asset is empty for variable {request.variable}") from original_error
+            raise OGDDecodeError(f"Decoded OGD asset is empty for variable {request.variable}") from original_error
 
         return self._pick_best_array(result, request.variable)
 

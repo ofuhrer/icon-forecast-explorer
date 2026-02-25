@@ -89,7 +89,7 @@ export function renderMeteogram({
   const padL = 36;
   const padR = 8;
   const padT = 8;
-  const padB = 22;
+  const padB = 40;
   const x0 = padL;
   const y0 = padT;
   const x1 = w - padR;
@@ -164,6 +164,9 @@ export function renderMeteogram({
         Number.isFinite(Number(p10[i])) &&
         Number.isFinite(Number(p90[i]))
     );
+  const bandHiddenReason = hasFullBandForControl
+    ? ""
+    : "band hidden: missing p10/p90 for some control points";
 
   if (hasFullBandForControl) {
     ctx.beginPath();
@@ -236,6 +239,7 @@ export function renderMeteogram({
   };
 
   drawLine(lines.control, "#1b263b", 1.8, true);
+  drawInlineLegend(ctx, x0 + 4, y1 + 8);
 
   if (lead != null && leads.includes(lead)) {
     const x = xAt(lead);
@@ -262,6 +266,17 @@ export function renderMeteogram({
     const textWidth = ctx.measureText(label).width;
     const tx = Math.max(x0, Math.min(x1 - textWidth, x - textWidth / 2));
     ctx.fillText(label, tx, h - 6);
+  }
+
+  if (pointEl) {
+    const parts = [];
+    if (statusText) {
+      parts.push(statusText);
+    }
+    if (bandHiddenReason) {
+      parts.push(`(${bandHiddenReason})`);
+    }
+    pointEl.textContent = parts.length > 0 ? `${basePointText} ${parts.join(" ")}` : basePointText;
   }
 }
 
@@ -323,4 +338,30 @@ function chooseTickIndices(count, maxTicks) {
   }
   indices.push(count - 1);
   return Array.from(new Set(indices)).sort((a, b) => a - b);
+}
+
+function drawInlineLegend(ctx, x, y) {
+  ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
+  ctx.fillRect(x, y, 110, 24);
+  ctx.strokeStyle = "#d7dde5";
+  ctx.strokeRect(x, y, 110, 24);
+
+  ctx.fillStyle = "rgba(66, 133, 244, 0.18)";
+  ctx.fillRect(x + 6, y + 5, 16, 7);
+  ctx.fillStyle = "#54667a";
+  ctx.font = "9px IBM Plex Sans, Segoe UI, sans-serif";
+  ctx.fillText("10-90% range", x + 26, y + 11);
+
+  ctx.strokeStyle = "#1b263b";
+  ctx.lineWidth = 1.8;
+  ctx.beginPath();
+  ctx.moveTo(x + 6, y + 17);
+  ctx.lineTo(x + 22, y + 17);
+  ctx.stroke();
+  ctx.fillStyle = "#1b263b";
+  ctx.beginPath();
+  ctx.arc(x + 14, y + 17, 1.7, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#54667a";
+  ctx.fillText("CTRL", x + 26, y + 20);
 }

@@ -40,7 +40,27 @@ class _NoLeadStore:
         return []
 
 
+class _CountingStore:
+    def __init__(self):
+        self.calls = 0
+
+    def lead_hours_for_init(self, dataset_id, init):
+        return [0, 1]
+
+    def get_cached_value(self, dataset_id, variable_id, init, lead, lat, lon, type_id="control"):
+        self.calls += 1
+        return 1.0 + lead
+
+    def get_value(self, dataset_id, variable_id, init, lead, lat, lon, type_id="control"):
+        self.calls += 1
+        return 2.0 + lead
+
+
 class ApiSeriesTests(unittest.TestCase):
+    def setUp(self):
+        if app_module is not None:
+            app_module._SERIES_CACHE.clear()
+
     @unittest.skipIf(app_module is None, "fastapi app dependencies not available in current interpreter")
     def test_series_reports_diagnostics_cached_only(self):
         with patch.object(app_module, "store", _FakeStore()):
@@ -145,6 +165,32 @@ class ApiSeriesTests(unittest.TestCase):
                 )
         self.assertEqual(ctx.exception.status_code, 400)
         self.assertIn("No leads available", str(ctx.exception.detail))
+
+    @unittest.skipIf(app_module is None, "fastapi app dependencies not available in current interpreter")
+    def test_series_cache_hit_on_repeated_request(self):
+        counting_store = _CountingStore()
+        with patch.object(app_module, "store", counting_store):
+            payload1 = app_module.series(
+                dataset_id="icon-ch1-eps-control",
+                variable_id="t_2m",
+                init="2026022500",
+                lat=47.001,
+                lon=8.001,
+                types="control",
+                cached_only=True,
+            )
+            payload2 = app_module.series(
+                dataset_id="icon-ch1-eps-control",
+                variable_id="t_2m",
+                init="2026022500",
+                lat=47.002,
+                lon=8.002,
+                types="control",
+                cached_only=True,
+            )
+        self.assertFalse(payload1["diagnostics"]["cache_hit"])
+        self.assertTrue(payload2["diagnostics"]["cache_hit"])
+        self.assertEqual(counting_store.calls, 2)
 
 
 if __name__ == "__main__":
