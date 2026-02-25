@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ICON Forecast Explorer</title>
+    <link href="https://unpkg.com/maplibre-gl@5.3.1/dist/maplibre-gl.css" rel="stylesheet" />
+    <link rel="stylesheet" href="/styles.css?v=20260225g" />
+  </head>
+  <body>
+    <div id="app">
+      <aside id="controls">
+        <h1>ICON Forecast Explorer</h1>
+
+        <div class="controlGrid">
+          <div class="controlRow">
+            <label for="datasetSelect">Model</label>
+            <select id="datasetSelect"></select>
+          </div>
+          <div class="controlRow">
+            <label for="initSelect">Forecast</label>
+            <select id="initSelect"></select>
+          </div>
+          <div class="controlRow">
+            <label for="variableSelect">Variable</label>
+            <select id="variableSelect"></select>
+          </div>
+          <div class="controlRow">
+            <label for="typeSelect">Statistic</label>
+            <select id="typeSelect"></select>
+          </div>
+        </div>
+
+        <label for="leadRange">Lead Time <span id="leadText"></span></label>
+        <input id="leadRange" type="range" min="0" max="48" step="1" />
+        <div id="animationControls">
+          <button id="playPauseBtn" type="button">Play</button>
+          <select id="speedSelect" aria-label="Animation speed">
+            <option value="1500">0.5x</option>
+            <option value="900" selected>1x</option>
+            <option value="550">2x</option>
+            <option value="300">4x</option>
+          </select>
+        </div>
+        <div id="validTimeBlock">
+          <div class="metaLabel">Valid Time</div>
+          <div id="validTimeText">-</div>
+        </div>
+        <details id="legendBlock" class="collapsible" open>
+          <summary class="metaLabel">Legend</summary>
+          <div id="legendRamp"></div>
+          <div id="legendLabels"></div>
+        </details>
+        <details id="meteogramBlock" class="collapsible">
+          <summary class="metaLabel">Meteogram (click map)</summary>
+          <div id="meteogramPoint">-</div>
+          <canvas id="meteogramCanvas" width="280" height="140"></canvas>
+        </details>
+        <div id="catalogInfo">Catalog status unavailable</div>
+      </aside>
+      <main id="map">
+        <div id="mapStatusOverlay" aria-live="polite">
+          <div id="tileFetchStatus">Tiles idle</div>
+        </div>
+      </main>
+    </div>
+
+    <script src="https://unpkg.com/maplibre-gl@5.3.1/dist/maplibre-gl.js"></script>
+    <script src="/main.js?v=20260225g" type="module"></script>
+  </body>
+</html>
