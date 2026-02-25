@@ -1,5 +1,5 @@
 import { fetchJson } from "/js/api.js";
-import { renderMeteogram as drawMeteogram, seriesHasMissingValues, SERIES_TYPES } from "/js/meteogram.js?v=20260225h";
+import { renderMeteogram as drawMeteogram, seriesHasMissingValues, SERIES_TYPES } from "/js/meteogram.js?v=20260225i";
 
 const state = {
   metadata: null,
@@ -99,6 +99,14 @@ let tileRetryTimer = null;
 let tileRetryBackoffMs = 500;
 let tileUrlNonce = 0;
 let lastHover = null;
+let weatherLayerRetryTimer = null;
+let pendingWeatherForceRecreate = false;
+let windVectorTimer = null;
+let windVectorAbortController = null;
+let windVectorRequestVersion = 0;
+let windVectorWarmupUntil = 0;
+let windVectorInFlight = false;
+let windVectorInFlightKey = "";
 
 async function bootstrap() {
   const initialUrlState = parseUrlState();
@@ -107,7 +115,7 @@ async function bootstrap() {
   bindEvents();
 
   map.on("load", () => {
-    addOrReplaceWeatherLayer();
+    addOrReplaceWeatherLayer({ forceRecreateSource: true });
     applyMapUrlState(initialUrlState);
     if (state.pinnedPoint) {
       loadSeriesForPinnedPoint();
@@ -135,6 +143,12 @@ async function bootstrap() {
   map.on("error", onMapError);
   map.on("moveend", () => {
     updateUrlState();
+    scheduleWindVectorUpdate();
+  });
+  map.on("idle", () => {
+    if (shouldShowWindVectors()) {
+      scheduleWindVectorUpdate(0);
+    }
   });
 
   scheduleMetadataPoll();
@@ -269,8 +283,8 @@ async function refreshMetadata({ preserveSelection }) {
   const previousKey = `${previous.datasetId}|${previous.typeId}|${previous.variableId}|${previous.init}|${previous.lead}`;
   const currentKey = `${state.datasetId}|${state.typeId}|${state.variableId}|${state.init}|${state.lead}`;
   const shouldReloadTiles = !preserveSelection || previousKey !== currentKey;
-  if (map.loaded() && shouldReloadTiles) {
-    addOrReplaceWeatherLayer();
+  if (isMapStyleReady() && shouldReloadTiles) {
+    addOrReplaceWeatherLayer({ forceRecreateSource: true });
   }
   if (state.pinnedPoint && (!preserveSelection || previousKey !== currentKey)) {
     loadSeriesForPinnedPoint();
@@ -303,7 +317,7 @@ function bindEvents() {
     setLeadChoicesForCurrentInit(true);
     renderLegend();
     renderRefreshStatus();
-    addOrReplaceWeatherLayer();
+    addOrReplaceWeatherLayer({ forceRecreateSource: true });
     if (state.pinnedPoint) {
       loadSeriesForPinnedPoint();
     }
@@ -313,7 +327,7 @@ function bindEvents() {
   els.type.addEventListener("change", () => {
     stopAnimation();
     state.typeId = els.type.value;
-    addOrReplaceWeatherLayer();
+    addOrReplaceWeatherLayer({ forceRecreateSource: true });
     if (state.pinnedPoint) {
       loadSeriesForPinnedPoint();
     }
@@ -324,7 +338,11 @@ function bindEvents() {
     stopAnimation();
     state.variableId = els.variable.value;
     renderLegend();
-    addOrReplaceWeatherLayer();
+    addOrReplaceWeatherLayer({ forceRecreateSource: true });
+    if (shouldShowWindVectors()) {
+      windVectorWarmupUntil = Date.now() + 10_000;
+      scheduleWindVectorUpdate(0);
+    }
     if (state.pinnedPoint) {
       loadSeriesForPinnedPoint();
     }
@@ -517,6 +535,16 @@ function anyDatasetRefreshing() {
   return state.metadata.datasets.some((d) => d.refresh && d.refresh.refreshing);
 }
 
+function isMapStyleReady() {
+  if (!map) {
+    return false;
+  }
+  if (typeof map.isStyleLoaded === "function") {
+    return map.isStyleLoaded();
+  }
+  return typeof map.loaded === "function" ? map.loaded() : false;
+}
+
 function weatherTileUrl() {
   const nonce = tileUrlNonce;
   return `/api/tiles/${encodeURIComponent(state.datasetId)}/${encodeURIComponent(
@@ -526,13 +554,27 @@ function weatherTileUrl() {
   )}&_r=${nonce}`;
 }
 
-function addOrReplaceWeatherLayer() {
+function addOrReplaceWeatherLayer({ forceRecreateSource = false } = {}) {
   const sourceId = "weather-source";
   const layerId = "weather-layer";
 
-  if (!map.loaded()) {
+  if (!isMapStyleReady()) {
+    pendingWeatherForceRecreate = pendingWeatherForceRecreate || forceRecreateSource;
+    if (!weatherLayerRetryTimer) {
+      weatherLayerRetryTimer = setTimeout(() => {
+        weatherLayerRetryTimer = null;
+        const pendingForce = pendingWeatherForceRecreate;
+        pendingWeatherForceRecreate = false;
+        addOrReplaceWeatherLayer({ forceRecreateSource: pendingForce });
+      }, 120);
+    }
     return;
   }
+  if (weatherLayerRetryTimer) {
+    clearTimeout(weatherLayerRetryTimer);
+    weatherLayerRetryTimer = null;
+  }
+  pendingWeatherForceRecreate = false;
   if (!state.init || state.leadHours.length === 0) {
     clearTileRetry();
     if (map.getLayer(layerId)) {
@@ -545,13 +587,24 @@ function addOrReplaceWeatherLayer() {
     if (els.fieldDebugInfo) {
       els.fieldDebugInfo.textContent = "";
     }
+    deactivateWindVectors();
     return;
   }
 
   tileRequestVersion += 1;
+  if (forceRecreateSource) {
+    tileUrlNonce += 1;
+  }
   clearTileRetry();
   setTileLoadingVisible(true);
   loadFieldDebugInfo(tileRequestVersion);
+  if (shouldShowWindVectors()) {
+    // Avoid showing stale arrows while new type/lead vectors load.
+    clearWindVectorLayer();
+    windVectorWarmupUntil = Date.now() + 10_000;
+  } else {
+    deactivateWindVectors();
+  }
   const source = map.getSource(sourceId);
   if (!source) {
     map.addSource(sourceId, {
@@ -570,11 +623,12 @@ function addOrReplaceWeatherLayer() {
       },
     });
     prefetchUpcomingLeads(PREFETCH_AHEAD_COUNT);
+    scheduleWindVectorUpdate(0);
     return;
   }
 
   // Keep previous tiles on screen while new tiles load to avoid flicker.
-  if (typeof source.setTiles === "function") {
+  if (!forceRecreateSource && typeof source.setTiles === "function") {
     source.setTiles([weatherTileUrl()]);
   } else {
     if (map.getLayer(layerId)) {
@@ -597,6 +651,7 @@ function addOrReplaceWeatherLayer() {
     });
   }
   prefetchUpcomingLeads(PREFETCH_AHEAD_COUNT);
+  scheduleWindVectorUpdate(0);
 }
 
 function onMapDataLoading(event) {
@@ -617,9 +672,226 @@ function onMapSourceData(event) {
     setTileLoadingVisible(false);
     loadFieldDebugInfo(tileRequestVersion);
     refreshHoverValueIfNeeded();
+    scheduleWindVectorUpdate();
   } else {
     weatherSourceLoading = true;
     setTileLoadingVisible(true);
+  }
+}
+
+function shouldShowWindVectors() {
+  return state.variableId === "wind_speed_10m";
+}
+
+function ensureWindVectorLayer() {
+  const sourceId = "wind-vector-source";
+  const layerId = "wind-vector-layer";
+  if (!map.getSource(sourceId)) {
+    map.addSource(sourceId, {
+      type: "geojson",
+      data: { type: "FeatureCollection", features: [] },
+    });
+  }
+  if (!map.getLayer(layerId)) {
+    map.addLayer({
+      id: layerId,
+      type: "line",
+      source: sourceId,
+      paint: {
+        "line-color": "rgba(15, 23, 42, 0.85)",
+        "line-width": ["interpolate", ["linear"], ["get", "speed"], 0, 1.0, 120, 2.6],
+        "line-opacity": 0.9,
+      },
+      layout: {
+        "line-cap": "round",
+        "line-join": "round",
+      },
+    });
+  }
+  // Keep vectors above raster weather tiles across layer/source refreshes.
+  if (map.getLayer(layerId)) {
+    map.moveLayer(layerId);
+  }
+}
+
+function clearWindVectorLayer() {
+  const source = map.getSource("wind-vector-source");
+  if (source && typeof source.setData === "function") {
+    source.setData({ type: "FeatureCollection", features: [] });
+  }
+}
+
+function destroyWindVectorLayer() {
+  const layerId = "wind-vector-layer";
+  const sourceId = "wind-vector-source";
+  if (map.getLayer(layerId)) {
+    map.removeLayer(layerId);
+  }
+  if (map.getSource(sourceId)) {
+    map.removeSource(sourceId);
+  }
+}
+
+function setWindVectorVisibility(visible) {
+  const layer = map.getLayer("wind-vector-layer");
+  if (!layer) {
+    return;
+  }
+  map.setLayoutProperty("wind-vector-layer", "visibility", visible ? "visible" : "none");
+}
+
+function deactivateWindVectors() {
+  // Invalidate any in-flight response so stale vectors can never be applied.
+  windVectorRequestVersion += 1;
+  if (windVectorAbortController) {
+    windVectorAbortController.abort();
+    windVectorAbortController = null;
+  }
+  if (windVectorTimer) {
+    clearTimeout(windVectorTimer);
+    windVectorTimer = null;
+  }
+  destroyWindVectorLayer();
+}
+
+function scheduleWindVectorUpdate(delayMs = 180) {
+  if (windVectorTimer) {
+    clearTimeout(windVectorTimer);
+  }
+  windVectorTimer = setTimeout(() => {
+    windVectorTimer = null;
+    updateWindVectors();
+  }, delayMs);
+}
+
+function windRequestKey() {
+  if (!map || typeof map.getBounds !== "function") {
+    return "";
+  }
+  const b = map.getBounds();
+  const r3 = (v) => Number(v).toFixed(3);
+  return [
+    state.datasetId,
+    state.typeId || "control",
+    state.init,
+    String(state.lead),
+    Number(map.getZoom()).toFixed(2),
+    r3(b.getSouth()),
+    r3(b.getNorth()),
+    r3(b.getWest()),
+    r3(b.getEast()),
+  ].join("|");
+}
+
+function buildWindVectorFeatures(vectors) {
+  const features = [];
+  for (const vec of vectors) {
+    const speed = Number(vec.speed);
+    const u = Number(vec.u);
+    const v = Number(vec.v);
+    if (!Number.isFinite(speed) || !Number.isFinite(u) || !Number.isFinite(v)) {
+      continue;
+    }
+    const p0 = map.project([vec.lon, vec.lat]);
+    const lenPx = Math.max(7, Math.min(24, 6 + speed * 0.07));
+    const theta = Math.atan2(v, u);
+    const dx = Math.cos(theta) * lenPx;
+    const dy = -Math.sin(theta) * lenPx;
+    const p1 = { x: p0.x + dx, y: p0.y + dy };
+    const headLen = Math.max(3, lenPx * 0.35);
+    const left = {
+      x: p1.x + headLen * Math.cos(theta + Math.PI - 0.45),
+      y: p1.y - headLen * Math.sin(theta + Math.PI - 0.45),
+    };
+    const right = {
+      x: p1.x + headLen * Math.cos(theta + Math.PI + 0.45),
+      y: p1.y - headLen * Math.sin(theta + Math.PI + 0.45),
+    };
+    const ll0 = map.unproject([p0.x, p0.y]);
+    const ll1 = map.unproject([p1.x, p1.y]);
+    const lll = map.unproject([left.x, left.y]);
+    const llr = map.unproject([right.x, right.y]);
+    features.push({
+      type: "Feature",
+      properties: { speed },
+      geometry: { type: "LineString", coordinates: [[ll0.lng, ll0.lat], [ll1.lng, ll1.lat]] },
+    });
+    features.push({
+      type: "Feature",
+      properties: { speed },
+      geometry: { type: "LineString", coordinates: [[ll1.lng, ll1.lat], [lll.lng, lll.lat]] },
+    });
+    features.push({
+      type: "Feature",
+      properties: { speed },
+      geometry: { type: "LineString", coordinates: [[ll1.lng, ll1.lat], [llr.lng, llr.lat]] },
+    });
+  }
+  return features;
+}
+
+async function updateWindVectors() {
+  if (!map || typeof map.getBounds !== "function") {
+    return;
+  }
+  if (typeof map.isStyleLoaded === "function" && !map.isStyleLoaded()) {
+    scheduleWindVectorUpdate(150);
+    return;
+  }
+  if (!shouldShowWindVectors() || !state.datasetId || !state.init || !Number.isFinite(state.lead)) {
+    deactivateWindVectors();
+    return;
+  }
+  ensureWindVectorLayer();
+  setWindVectorVisibility(true);
+  const requestKey = windRequestKey();
+  if (windVectorInFlight && windVectorInFlightKey === requestKey) {
+    return;
+  }
+
+  const bounds = map.getBounds();
+  const requestVersion = ++windVectorRequestVersion;
+  if (windVectorAbortController) {
+    windVectorAbortController.abort();
+  }
+  windVectorAbortController = new AbortController();
+  windVectorInFlight = true;
+  windVectorInFlightKey = requestKey;
+  const url = `/api/wind-vectors?dataset_id=${encodeURIComponent(state.datasetId)}&type_id=${encodeURIComponent(
+    state.typeId || "control"
+  )}&init=${encodeURIComponent(state.init)}&lead=${state.lead}&min_lat=${bounds.getSouth()}&max_lat=${bounds.getNorth()}&min_lon=${bounds.getWest()}&max_lon=${bounds.getEast()}&zoom=${map.getZoom()}`;
+  try {
+    const payload = await fetchJson(url, { signal: windVectorAbortController.signal, timeoutMs: 12000 });
+    if (requestVersion !== windVectorRequestVersion) {
+      return;
+    }
+    if (payload?.status === "loading") {
+      scheduleWindVectorUpdate(500);
+      return;
+    }
+    const source = map.getSource("wind-vector-source");
+    if (!source || typeof source.setData !== "function") {
+      return;
+    }
+    const features = buildWindVectorFeatures(payload?.vectors || []);
+    source.setData({ type: "FeatureCollection", features });
+    if (features.length === 0 && Date.now() < windVectorWarmupUntil && shouldShowWindVectors()) {
+      scheduleWindVectorUpdate(500);
+    }
+  } catch (err) {
+    if (err?.name === "AbortError") {
+      return;
+    }
+    clearWindVectorLayer();
+    if (shouldShowWindVectors()) {
+      // Retry automatically when initial fetch races with tile/data loading.
+      scheduleWindVectorUpdate(800);
+    }
+  } finally {
+    if (windVectorInFlightKey === requestKey) {
+      windVectorInFlight = false;
+      windVectorInFlightKey = "";
+    }
   }
 }
 
@@ -1073,7 +1345,7 @@ function applyUrlState(urlState) {
 }
 
 function applyMapUrlState(urlState) {
-  if (!urlState || !map.loaded()) {
+  if (!urlState || !isMapStyleReady()) {
     return;
   }
   const hasCenter =

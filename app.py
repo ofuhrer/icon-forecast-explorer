@@ -6,6 +6,7 @@ import logging
 import os
 import threading
 import time
+import math
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Dict, List
@@ -28,7 +29,7 @@ SERIES_LATLON_BUCKET_DEG = float(os.getenv("SERIES_LATLON_BUCKET_DEG", "0.01"))
 
 
 def _configure_logging() -> logging.Logger:
-    level_name = os.getenv("ICON_LOG_LEVEL", "INFO").upper()
+    level_name = os.getenv("LOG_LEVEL", os.getenv("ICON_LOG_LEVEL", "INFO")).upper()
     level = getattr(logging, level_name, logging.INFO)
     logger = logging.getLogger("icon_forecast")
     logger.setLevel(level)
@@ -378,12 +379,99 @@ def tiles(
     return Response(content=buf.getvalue(), media_type="image/png", headers={"Cache-Control": "no-store"})
 
 
+@app.get("/api/wind-vectors")
+def wind_vectors(
+    dataset_id: str = Query(...),
+    type_id: str = Query("control"),
+    init: str = Query(...),
+    lead: int = Query(..., ge=0),
+    min_lat: float = Query(...),
+    max_lat: float = Query(...),
+    min_lon: float = Query(...),
+    max_lon: float = Query(...),
+    zoom: float = Query(7.0),
+) -> Dict[str, object]:
+    try:
+        # Match tile behavior: fetch synchronously on cache miss so vectors
+        # appear immediately after switching to wind (no zoom needed).
+        if hasattr(store, "get_wind_vectors"):
+            u_field, v_field = store.get_wind_vectors(dataset_id, init, lead, type_id=type_id)
+        else:
+            cached = store.get_cached_wind_vectors(dataset_id, init, lead, type_id=type_id)
+            if cached is None:
+                store.queue_wind_vector_fetch(dataset_id, init, lead, type_id=type_id)
+                return {"status": "loading", "vectors": [], "unit": "km/h"}
+            u_field, v_field = cached
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    z = float(zoom)
+    base_stride = int(max(6, min(18, round(18 - z))))
+    y0 = _lat_to_y(max_lat, store._grid_height)
+    y1 = _lat_to_y(min_lat, store._grid_height)
+    x0 = _lon_to_x(min_lon, store._grid_width)
+    x1 = _lon_to_x(max_lon, store._grid_width)
+    y_start, y_end = sorted((y0, y1))
+    x_start, x_end = sorted((x0, x1))
+    ny = max(1, y_end - y_start + 1)
+    nx = max(1, x_end - x_start + 1)
+    # Keep a denser vector field at full-domain views so arrows are visible
+    # immediately after switching to wind, without requiring a zoom interaction.
+    target_vectors = 2500
+    adaptive_stride = int(max(1, math.ceil(math.sqrt((nx * ny) / float(target_vectors)))))
+    stride = max(base_stride, adaptive_stride)
+    def _sample_vectors(sample_stride: int) -> List[Dict[str, float]]:
+        sampled: List[Dict[str, float]] = []
+        for yy in range(y_start, y_end + 1, sample_stride):
+            for xx in range(x_start, x_end + 1, sample_stride):
+                u = float(u_field[yy, xx])
+                v = float(v_field[yy, xx])
+                speed = math.sqrt(u * u + v * v)
+                if not np.isfinite(speed):
+                    continue
+                lat = _y_to_lat(yy, store._grid_height)
+                lon = _x_to_lon(xx, store._grid_width)
+                sampled.append({"lat": lat, "lon": lon, "u": u, "v": v, "speed": speed})
+        return sampled
+
+    vectors: List[Dict[str, float]] = _sample_vectors(stride)
+    # Robustness: if full-domain sampling is too sparse for the current flow
+    # pattern, automatically densify so arrows appear without requiring zoom.
+    if len(vectors) < 80 and stride > 1:
+        vectors = _sample_vectors(max(1, stride // 2))
+    if len(vectors) < 80 and stride > 2:
+        vectors = _sample_vectors(1)
+    return {"status": "ready", "vectors": vectors, "unit": "km/h"}
+
+
 @app.get("/health")
 def health() -> Dict[str, str]:
     return {"status": "ok"}
 
 
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
+
+
+def _lon_to_x(lon: float, width: int) -> int:
+    frac = (lon - SWISS_BOUNDS["min_lon"]) / (SWISS_BOUNDS["max_lon"] - SWISS_BOUNDS["min_lon"])
+    return int(np.clip(round(frac * (width - 1)), 0, width - 1))
+
+
+def _lat_to_y(lat: float, height: int) -> int:
+    frac = (SWISS_BOUNDS["max_lat"] - lat) / (SWISS_BOUNDS["max_lat"] - SWISS_BOUNDS["min_lat"])
+    return int(np.clip(round(frac * (height - 1)), 0, height - 1))
+
+
+def _x_to_lon(x: int, width: int) -> float:
+    frac = float(x) / float(max(1, width - 1))
+    return SWISS_BOUNDS["min_lon"] + frac * (SWISS_BOUNDS["max_lon"] - SWISS_BOUNDS["min_lon"])
+
+
+def _y_to_lat(y: int, height: int) -> float:
+    frac = float(y) / float(max(1, height - 1))
+    return SWISS_BOUNDS["max_lat"] - frac * (SWISS_BOUNDS["max_lat"] - SWISS_BOUNDS["min_lat"])
 
 
 def render_tile_rgba(field: np.ndarray, z: int, x: int, y: int, variable_id: str) -> np.ndarray:

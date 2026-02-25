@@ -220,11 +220,14 @@ class ForecastStore:
 
         self._cache_dir = Path("cache")
         self._field_cache_dir = self._cache_dir / "fields"
+        self._vector_cache_dir = self._cache_dir / "vectors"
         self._catalog_cache_dir = self._cache_dir / "catalogs"
         self._field_cache_dir.mkdir(parents=True, exist_ok=True)
+        self._vector_cache_dir.mkdir(parents=True, exist_ok=True)
         self._catalog_cache_dir.mkdir(parents=True, exist_ok=True)
 
         self._field_cache: Dict[Tuple[str, ...], np.ndarray] = {}
+        self._wind_vector_cache: Dict[Tuple[str, ...], Tuple[np.ndarray, np.ndarray]] = {}
         self._field_debug_info: Dict[Tuple[str, ...], Dict[str, object]] = {}
         self._key_locks: Dict[Tuple[str, ...], threading.Lock] = {}
         self._key_locks_guard = threading.Lock()
@@ -308,10 +311,36 @@ class ForecastStore:
         LOGGER.debug("Queued field fetch key=%s", key)
         return True
 
+    def queue_wind_vector_fetch(
+        self,
+        dataset_id: str,
+        init_str: str,
+        lead_hour: int,
+        type_id: str = "control",
+    ) -> bool:
+        self._validate_request(dataset_id, "wind_speed_10m", init_str, lead_hour, type_id)
+        key = (dataset_id, type_id, "wind_vectors", init_str, lead_hour)
+        if key in self._wind_vector_cache:
+            return False
+        if self._wind_vector_cache_path(dataset_id, type_id, init_str, lead_hour).exists():
+            return False
+
+        with self._background_fetch_guard:
+            if key in self._background_fetch_inflight:
+                return False
+            self._background_fetch_inflight.add(key)
+
+        self._background_fetch_executor.submit(self._background_fetch_job, key)
+        LOGGER.debug("Queued wind vector fetch key=%s", key)
+        return True
+
     def _background_fetch_job(self, key: Tuple[str, ...]) -> None:
         dataset_id, type_id, variable_id, init_str, lead_hour = key
         try:
-            self.get_field(dataset_id, variable_id, init_str, int(lead_hour), type_id=str(type_id))
+            if str(variable_id) == "wind_vectors":
+                self.get_wind_vectors(dataset_id, init_str, int(lead_hour), type_id=str(type_id))
+            else:
+                self.get_field(dataset_id, variable_id, init_str, int(lead_hour), type_id=str(type_id))
         except Exception:
             LOGGER.exception("Background field fetch failed key=%s", key)
         finally:
@@ -695,6 +724,65 @@ class ForecastStore:
         self._field_cache[key] = loaded
         return loaded
 
+    def get_cached_wind_vectors(
+        self,
+        dataset_id: str,
+        init_str: str,
+        lead_hour: int,
+        type_id: str = "control",
+    ) -> Tuple[np.ndarray, np.ndarray] | None:
+        self._dataset_config(dataset_id)
+        if type_id not in SUPPORTED_FORECAST_TYPES:
+            raise ValueError(f"Unknown type_id: {type_id}")
+        catalog = self._catalog_for(dataset_id)
+        if init_str not in catalog["init_times"]:
+            return None
+        if lead_hour not in self.lead_hours_for_init(dataset_id, init_str):
+            return None
+        key = (dataset_id, type_id, "wind_vectors", init_str, lead_hour)
+        cached = self._wind_vector_cache.get(key)
+        if cached is not None:
+            return cached
+        disk_path = self._wind_vector_cache_path(dataset_id, type_id, init_str, lead_hour)
+        if not disk_path.exists():
+            return None
+        loaded = self._load_cached_wind_vector_file(disk_path)
+        if loaded is None:
+            return None
+        self._wind_vector_cache[key] = loaded
+        return loaded
+
+    def get_wind_vectors(
+        self,
+        dataset_id: str,
+        init_str: str,
+        lead_hour: int,
+        type_id: str = "control",
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        self._validate_request(dataset_id, "wind_speed_10m", init_str, lead_hour, type_id)
+        key = (dataset_id, type_id, "wind_vectors", init_str, lead_hour)
+        cached = self._wind_vector_cache.get(key)
+        if cached is not None:
+            return cached
+
+        key_lock = self._get_key_lock(key)
+        with key_lock:
+            cached = self._wind_vector_cache.get(key)
+            if cached is not None:
+                return cached
+
+            disk_path = self._wind_vector_cache_path(dataset_id, type_id, init_str, lead_hour)
+            if disk_path.exists():
+                loaded = self._load_cached_wind_vector_file(disk_path)
+                if loaded is not None:
+                    self._wind_vector_cache[key] = loaded
+                    return loaded
+
+            vectors = self._fetch_and_regrid_wind_vectors(dataset_id, init_str, lead_hour, type_id=type_id)
+            self._save_cached_wind_vector_file(disk_path, vectors[0], vectors[1])
+            self._wind_vector_cache[key] = vectors
+            return vectors
+
     def _catalog_for(self, dataset_id: str) -> Dict[str, object]:
         if dataset_id not in self._catalogs:
             raise ValueError(f"Unknown dataset_id: {dataset_id}")
@@ -725,8 +813,14 @@ class ForecastStore:
             raise ValueError(f"Unknown lead hour {lead_hour} for init {init_str}")
 
     def _field_cache_path(self, dataset_id: str, type_id: str, variable_id: str, init_str: str, lead_hour: int) -> Path:
+        unit_tag = "u2" if variable_id in {"wind_speed_10m", "vmax_10m"} else "u1"
         return self._field_cache_dir / (
-            f"{FIELD_CACHE_VERSION}_{dataset_id}_{type_id}_{variable_id}_{init_str}_{lead_hour:03d}.npz"
+            f"{FIELD_CACHE_VERSION}_{dataset_id}_{type_id}_{variable_id}_{unit_tag}_{init_str}_{lead_hour:03d}.npz"
+        )
+
+    def _wind_vector_cache_path(self, dataset_id: str, type_id: str, init_str: str, lead_hour: int) -> Path:
+        return self._vector_cache_dir / (
+            f"{FIELD_CACHE_VERSION}_{dataset_id}_{type_id}_wind_vectors_u2_{init_str}_{lead_hour:03d}.npz"
         )
 
     @staticmethod
@@ -773,6 +867,27 @@ class ForecastStore:
         os.replace(tmp_path, path)
         LOGGER.debug("Saved field cache path=%s bytes=%s", path, path.stat().st_size if path.exists() else -1)
 
+    @staticmethod
+    def _load_cached_wind_vector_file(path: Path) -> Tuple[np.ndarray, np.ndarray] | None:
+        try:
+            payload = np.load(path)
+            return payload["u"], payload["v"]
+        except (EOFError, OSError, zipfile.BadZipFile, KeyError, ValueError):
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            LOGGER.warning("Dropped corrupt/incomplete wind vector cache file path=%s", path)
+            return None
+
+    @staticmethod
+    def _save_cached_wind_vector_file(path: Path, u_field: np.ndarray, v_field: np.ndarray) -> None:
+        tmp_path = path.with_suffix(path.suffix + ".tmp")
+        with tmp_path.open("wb") as tmp_file:
+            np.savez_compressed(tmp_file, u=u_field, v=v_field)
+        os.replace(tmp_path, path)
+        LOGGER.debug("Saved wind vector cache path=%s bytes=%s", path, path.stat().st_size if path.exists() else -1)
+
     def _fetch_and_regrid(
         self, dataset_id: str, variable_id: str, init_str: str, lead_hour: int, type_id: str = "control"
     ) -> Tuple[np.ndarray, Dict[str, object]]:
@@ -800,6 +915,60 @@ class ForecastStore:
             lead_hour,
             type_id,
         )
+
+    def _fetch_and_regrid_wind_vectors(
+        self, dataset_id: str, init_str: str, lead_hour: int, type_id: str = "control"
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        cfg = self._dataset_config(dataset_id)
+        self._ensure_eccodes_definition_path()
+        try:
+            from meteodatalab import ogd_api
+        except ImportError as exc:
+            raise RuntimeError(
+                "meteodata-lab is required for OGD ingestion. Install dependencies from requirements.txt"
+            ) from exc
+
+        reference_iso = self._init_to_iso(init_str)
+        if type_id == "control":
+            u_field, u_units, _u_offset, _u_info = self._fetch_direct_regridded(
+                ogd_api, cfg.ogd_collection, "U_10M", reference_iso, lead_hour
+            )
+            v_field, v_units, _v_offset, _v_info = self._fetch_direct_regridded(
+                ogd_api, cfg.ogd_collection, "V_10M", reference_iso, lead_hour
+            )
+            u_field = self._normalize_variable_units(u_field, "wind_speed_10m", units_hint=u_units).astype(np.float32)
+            v_field = self._normalize_variable_units(v_field, "wind_speed_10m", units_hint=v_units).astype(np.float32)
+            return u_field, v_field
+
+        u_ctrl, u_ctrl_units, _u_ctrl_offset, _u_ctrl_info = self._fetch_direct_regridded(
+            ogd_api, cfg.ogd_collection, "U_10M", reference_iso, lead_hour
+        )
+        v_ctrl, v_ctrl_units, _v_ctrl_offset, _v_ctrl_info = self._fetch_direct_regridded(
+            ogd_api, cfg.ogd_collection, "V_10M", reference_iso, lead_hour
+        )
+        u_ens, u_ens_units, _u_ens_offset, _u_ens_info = self._fetch_direct_member_stack(
+            ogd_api, cfg.ogd_collection, "U_10M", reference_iso, lead_hour
+        )
+        v_ens, v_ens_units, _v_ens_offset, _v_ens_info = self._fetch_direct_member_stack(
+            ogd_api, cfg.ogd_collection, "V_10M", reference_iso, lead_hour
+        )
+
+        u_ctrl = self._normalize_variable_units(u_ctrl, "wind_speed_10m", units_hint=u_ctrl_units).astype(np.float32)
+        v_ctrl = self._normalize_variable_units(v_ctrl, "wind_speed_10m", units_hint=v_ctrl_units).astype(np.float32)
+        u_ens = self._normalize_variable_units(u_ens, "wind_speed_10m", units_hint=u_ens_units).astype(np.float32)
+        v_ens = self._normalize_variable_units(v_ens, "wind_speed_10m", units_hint=v_ens_units).astype(np.float32)
+
+        u_members = np.concatenate([u_ctrl[np.newaxis, ...], u_ens], axis=0)
+        v_members = np.concatenate([v_ctrl[np.newaxis, ...], v_ens], axis=0)
+        self._check_ensemble_member_count(
+            dataset_id,
+            cfg.expected_members_total,
+            u_members.shape[0],
+            "wind_speed_10m",
+            init=reference_iso,
+            lead_hour=lead_hour,
+        )
+        return self._reduce_members(u_members, type_id), self._reduce_members(v_members, type_id)
 
     def _fetch_control_field(
         self, ogd_api, ogd_collection: str, variable_id: str, variable: VariableMeta, reference_iso: str, lead_hour: int
@@ -1033,6 +1202,7 @@ class ForecastStore:
         result = field.astype(np.float32)
         units = units_hint.lower().strip()
         units_compact = units.replace(" ", "")
+        units_alnum = re.sub(r"[^a-z0-9]+", "", units)
 
         if variable_id in {"t_2m", "td_2m"}:
             if units in {"k", "kelvin"}:
@@ -1045,10 +1215,25 @@ class ForecastStore:
             return result
 
         if variable_id in {"wind_speed_10m", "vmax_10m"}:
-            if units_compact in {"m/s", "ms-1", "m*s-1", "meterpersecond", "metrepersecond"}:
+            if units_compact in {"m/s", "ms-1", "m*s-1", "ms^-1", "meterpersecond", "metrepersecond"}:
+                return result * MS_TO_KMH
+            if units_alnum in {
+                "ms1",
+                "ms01",
+                "ms001",
+                "ms",
+                "meterpersecond",
+                "metrepersecond",
+                "meterspersecond",
+                "metrespersecond",
+            }:
                 return result * MS_TO_KMH
             if units_compact in {"kt", "knot", "knots"}:
                 return result * 1.852
+            # OGD wind diagnostics are expected in m/s; if unit metadata is missing/odd,
+            # default to m/s to avoid under-colored wind fields with km/h color tables.
+            if not units:
+                return result * MS_TO_KMH
             return result
 
         if variable_id in {"tot_prec", "w_snow", "snow"}:
@@ -1656,10 +1841,32 @@ class ForecastStore:
                     continue
                 if init_dt < cutoff:
                     self._safe_unlink(path)
+            for path in self._vector_cache_dir.glob("*.npz"):
+                parsed = self._parse_field_cache_filename(path.name)
+                if parsed is None:
+                    continue
+                version, dataset_id, init_str = parsed
+                if version != FIELD_CACHE_VERSION:
+                    self._safe_unlink(path)
+                    continue
+                if dataset_id not in self._dataset_configs:
+                    self._safe_unlink(path)
+                    continue
+                if keep_inits_by_dataset.get(dataset_id) and init_str not in keep_inits_by_dataset[dataset_id]:
+                    self._safe_unlink(path)
+                    continue
+                try:
+                    init_dt = datetime.strptime(init_str, "%Y%m%d%H").replace(tzinfo=timezone.utc)
+                except ValueError:
+                    self._safe_unlink(path)
+                    continue
+                if init_dt < cutoff:
+                    self._safe_unlink(path)
 
     def _prune_memory_cache(self, keep_inits_by_dataset: Dict[str, set[str]], cutoff: datetime) -> None:
         drop_keys: List[Tuple[str, ...]] = []
-        for key in list(self._field_cache.keys()):
+        active_keys = list(self._field_cache.keys()) + [k for k in self._wind_vector_cache.keys() if k not in self._field_cache]
+        for key in active_keys:
             if len(key) >= 5:
                 dataset_id, _type_id, _variable_id, init_str, _lead = key[:5]
             elif len(key) == 4:
@@ -1684,13 +1891,15 @@ class ForecastStore:
 
         for key in drop_keys:
             self._field_cache.pop(key, None)
+            self._wind_vector_cache.pop(key, None)
         self._prune_stale_key_locks()
 
     def _prune_stale_key_locks(self) -> None:
         with self._key_locks_guard:
-            if len(self._key_locks) <= max(128, len(self._field_cache) * 2):
+            active_size = len(self._field_cache) + len(self._wind_vector_cache)
+            if len(self._key_locks) <= max(128, active_size * 2):
                 return
-            active_keys = set(self._field_cache.keys())
+            active_keys = set(self._field_cache.keys()) | set(self._wind_vector_cache.keys())
             stale = [key for key in self._key_locks.keys() if key not in active_keys]
             for key in stale:
                 self._key_locks.pop(key, None)

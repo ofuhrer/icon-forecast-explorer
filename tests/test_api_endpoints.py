@@ -45,6 +45,8 @@ class _FakeStore:
 
     def __init__(self) -> None:
         self.refresh_calls = []
+        self._grid_width = 540
+        self._grid_height = 380
 
     def start_background_prewarm(self):
         return None
@@ -83,6 +85,15 @@ class _FakeStore:
         return 5.0
 
     def queue_field_fetch(self, dataset_id, variable_id, init, lead, type_id="control"):
+        return True
+
+    def get_cached_wind_vectors(self, dataset_id, init, lead, type_id="control"):
+        return (
+            np.full((380, 540), 10.0, dtype=np.float32),
+            np.full((380, 540), 0.0, dtype=np.float32),
+        )
+
+    def queue_wind_vector_fetch(self, dataset_id, init, lead, type_id="control"):
         return True
 
 
@@ -193,6 +204,24 @@ class ApiEndpointTests(unittest.TestCase):
                 type_id="control",
             )
         self.assertEqual(payload, {"ok": True, "queued": True})
+
+    def test_wind_vectors_endpoint_returns_vectors(self):
+        fake_store = _FakeStore()
+        with patch.object(app_module, "store", fake_store):
+            payload = app_module.wind_vectors(
+                dataset_id="icon-ch1-eps-control",
+                type_id="control",
+                init="2026022500",
+                lead=0,
+                min_lat=46.0,
+                max_lat=47.0,
+                min_lon=7.0,
+                max_lon=8.0,
+                zoom=7.0,
+            )
+        self.assertEqual(payload["status"], "ready")
+        self.assertIn("vectors", payload)
+        self.assertGreater(len(payload["vectors"]), 0)
 
 
 if __name__ == "__main__":
