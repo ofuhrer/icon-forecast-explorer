@@ -19,7 +19,7 @@ from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
 
-from weather_data import SWISS_BOUNDS, ForecastStore, SUPPORTED_TIME_OPERATORS, TIME_OPERATORS
+from weather_data import ForecastStore, SUPPORTED_TIME_OPERATORS, TIME_OPERATORS
 
 TILE_SIZE = 256
 COLORMAP_MANIFEST_PATH = Path(__file__).resolve().parent / "colormaps.json"
@@ -182,7 +182,7 @@ def metadata() -> Dict[str, object]:
         "init_times": first["init_times"],
         "lead_hours": first["lead_hours"],
         "init_to_leads": first["init_to_leads"],
-        "bounds": SWISS_BOUNDS,
+        "bounds": store.grid_bounds(),
     }
 
 
@@ -452,7 +452,7 @@ def tiles(
         )
         raise
 
-    rgba = render_tile_rgba(field, z, x, y, variable_id)
+    rgba = render_tile_rgba(field, z, x, y, variable_id, store.grid_bounds())
     image = Image.fromarray(rgba, mode="RGBA")
     buf = BytesIO()
     image.save(buf, format="PNG", optimize=True)
@@ -497,10 +497,11 @@ def wind_vectors(
 
     z = float(zoom)
     base_stride = int(max(6, min(18, round(18 - z))))
-    y0 = _lat_to_y(max_lat, store._grid_height)
-    y1 = _lat_to_y(min_lat, store._grid_height)
-    x0 = _lon_to_x(min_lon, store._grid_width)
-    x1 = _lon_to_x(max_lon, store._grid_width)
+    bounds = store.grid_bounds()
+    y0 = _lat_to_y(max_lat, store._grid_height, bounds)
+    y1 = _lat_to_y(min_lat, store._grid_height, bounds)
+    x0 = _lon_to_x(min_lon, store._grid_width, bounds)
+    x1 = _lon_to_x(max_lon, store._grid_width, bounds)
     y_start, y_end = sorted((y0, y1))
     x_start, x_end = sorted((x0, x1))
     ny = max(1, y_end - y_start + 1)
@@ -519,8 +520,8 @@ def wind_vectors(
                 speed = math.sqrt(u * u + v * v)
                 if not np.isfinite(speed):
                     continue
-                lat = _y_to_lat(yy, store._grid_height)
-                lon = _x_to_lon(xx, store._grid_width)
+                lat = _y_to_lat(yy, store._grid_height, bounds)
+                lon = _x_to_lon(xx, store._grid_width, bounds)
                 sampled.append({"lat": lat, "lon": lon, "u": u, "v": v, "speed": speed})
         return sampled
 
@@ -542,27 +543,29 @@ def health() -> Dict[str, str]:
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
 
 
-def _lon_to_x(lon: float, width: int) -> int:
-    frac = (lon - SWISS_BOUNDS["min_lon"]) / (SWISS_BOUNDS["max_lon"] - SWISS_BOUNDS["min_lon"])
+def _lon_to_x(lon: float, width: int, bounds: Dict[str, float]) -> int:
+    lon_span = max(1e-9, float(bounds["max_lon"] - bounds["min_lon"]))
+    frac = (lon - bounds["min_lon"]) / lon_span
     return int(np.clip(round(frac * (width - 1)), 0, width - 1))
 
 
-def _lat_to_y(lat: float, height: int) -> int:
-    frac = (SWISS_BOUNDS["max_lat"] - lat) / (SWISS_BOUNDS["max_lat"] - SWISS_BOUNDS["min_lat"])
+def _lat_to_y(lat: float, height: int, bounds: Dict[str, float]) -> int:
+    lat_span = max(1e-9, float(bounds["max_lat"] - bounds["min_lat"]))
+    frac = (bounds["max_lat"] - lat) / lat_span
     return int(np.clip(round(frac * (height - 1)), 0, height - 1))
 
 
-def _x_to_lon(x: int, width: int) -> float:
+def _x_to_lon(x: int, width: int, bounds: Dict[str, float]) -> float:
     frac = float(x) / float(max(1, width - 1))
-    return SWISS_BOUNDS["min_lon"] + frac * (SWISS_BOUNDS["max_lon"] - SWISS_BOUNDS["min_lon"])
+    return bounds["min_lon"] + frac * (bounds["max_lon"] - bounds["min_lon"])
 
 
-def _y_to_lat(y: int, height: int) -> float:
+def _y_to_lat(y: int, height: int, bounds: Dict[str, float]) -> float:
     frac = float(y) / float(max(1, height - 1))
-    return SWISS_BOUNDS["max_lat"] - frac * (SWISS_BOUNDS["max_lat"] - SWISS_BOUNDS["min_lat"])
+    return bounds["max_lat"] - frac * (bounds["max_lat"] - bounds["min_lat"])
 
 
-def render_tile_rgba(field: np.ndarray, z: int, x: int, y: int, variable_id: str) -> np.ndarray:
+def render_tile_rgba(field: np.ndarray, z: int, x: int, y: int, variable_id: str, bounds: Dict[str, float]) -> np.ndarray:
     px, py = np.meshgrid(np.arange(TILE_SIZE), np.arange(TILE_SIZE))
     global_x = x * TILE_SIZE + px
     global_y = y * TILE_SIZE + py
@@ -571,22 +574,24 @@ def render_tile_rgba(field: np.ndarray, z: int, x: int, y: int, variable_id: str
     lon = global_x / world_size * 360.0 - 180.0
     lat = np.rad2deg(np.arctan(np.sinh(np.pi * (1 - 2 * global_y / world_size))))
 
-    lat_mask = (lat >= SWISS_BOUNDS["min_lat"]) & (lat <= SWISS_BOUNDS["max_lat"])
-    lon_mask = (lon >= SWISS_BOUNDS["min_lon"]) & (lon <= SWISS_BOUNDS["max_lon"])
-    swiss_mask = lat_mask & lon_mask
+    lat_mask = (lat >= bounds["min_lat"]) & (lat <= bounds["max_lat"])
+    lon_mask = (lon >= bounds["min_lon"]) & (lon <= bounds["max_lon"])
+    domain_mask = lat_mask & lon_mask
 
     rgba = np.zeros((TILE_SIZE, TILE_SIZE, 4), dtype=np.uint8)
-    if not np.any(swiss_mask):
+    if not np.any(domain_mask):
         return rgba
 
     h, w = field.shape
+    lon_span = max(1e-9, float(bounds["max_lon"] - bounds["min_lon"]))
+    lat_span = max(1e-9, float(bounds["max_lat"] - bounds["min_lat"]))
     x_idx = np.clip(
-        np.round((lon - SWISS_BOUNDS["min_lon"]) / (SWISS_BOUNDS["max_lon"] - SWISS_BOUNDS["min_lon"]) * (w - 1)).astype(int),
+        np.round((lon - bounds["min_lon"]) / lon_span * (w - 1)).astype(int),
         0,
         w - 1,
     )
     y_idx = np.clip(
-        np.round((SWISS_BOUNDS["max_lat"] - lat) / (SWISS_BOUNDS["max_lat"] - SWISS_BOUNDS["min_lat"]) * (h - 1)).astype(int),
+        np.round((bounds["max_lat"] - lat) / lat_span * (h - 1)).astype(int),
         0,
         h - 1,
     )
@@ -594,8 +599,8 @@ def render_tile_rgba(field: np.ndarray, z: int, x: int, y: int, variable_id: str
     sampled = field[y_idx, x_idx]
     colors = apply_colormap(sampled, variable_id)
 
-    rgba[swiss_mask, :3] = colors[swiss_mask]
-    rgba[swiss_mask, 3] = 170
+    rgba[domain_mask, :3] = colors[domain_mask]
+    rgba[domain_mask, 3] = 170
     return rgba
 
 

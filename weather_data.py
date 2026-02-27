@@ -378,6 +378,8 @@ class ForecastStore:
 
         self._grid_width = 540
         self._grid_height = 380
+        self._grid_bounds = dict(SWISS_BOUNDS)
+        self._grid_bounds_guard = threading.Lock()
 
         self._cache_dir = Path("cache")
         self._field_cache_dir = self._cache_dir / "fields"
@@ -1005,9 +1007,12 @@ class ForecastStore:
         field = self.get_field(
             dataset_id, variable_id, init_str, lead_hour, type_id=type_id, time_operator=time_operator
         )
+        bounds = self.grid_bounds()
+        lon_span = max(1e-9, float(bounds["max_lon"] - bounds["min_lon"]))
+        lat_span = max(1e-9, float(bounds["max_lat"] - bounds["min_lat"]))
 
-        lon_frac = (lon - SWISS_BOUNDS["min_lon"]) / (SWISS_BOUNDS["max_lon"] - SWISS_BOUNDS["min_lon"])
-        lat_frac = (SWISS_BOUNDS["max_lat"] - lat) / (SWISS_BOUNDS["max_lat"] - SWISS_BOUNDS["min_lat"])
+        lon_frac = (lon - bounds["min_lon"]) / lon_span
+        lat_frac = (bounds["max_lat"] - lat) / lat_span
 
         x = int(np.clip(round(lon_frac * (self._grid_width - 1)), 0, self._grid_width - 1))
         y = int(np.clip(round(lat_frac * (self._grid_height - 1)), 0, self._grid_height - 1))
@@ -1029,13 +1034,20 @@ class ForecastStore:
         )
         if field is None:
             return None
+        bounds = self.grid_bounds()
+        lon_span = max(1e-9, float(bounds["max_lon"] - bounds["min_lon"]))
+        lat_span = max(1e-9, float(bounds["max_lat"] - bounds["min_lat"]))
 
-        lon_frac = (lon - SWISS_BOUNDS["min_lon"]) / (SWISS_BOUNDS["max_lon"] - SWISS_BOUNDS["min_lon"])
-        lat_frac = (SWISS_BOUNDS["max_lat"] - lat) / (SWISS_BOUNDS["max_lat"] - SWISS_BOUNDS["min_lat"])
+        lon_frac = (lon - bounds["min_lon"]) / lon_span
+        lat_frac = (bounds["max_lat"] - lat) / lat_span
 
         x = int(np.clip(round(lon_frac * (self._grid_width - 1)), 0, self._grid_width - 1))
         y = int(np.clip(round(lat_frac * (self._grid_height - 1)), 0, self._grid_height - 1))
         return float(field[y, x])
+
+    def grid_bounds(self) -> Dict[str, float]:
+        with self._grid_bounds_guard:
+            return dict(self._grid_bounds)
 
     def get_cached_field(
         self,
@@ -2415,8 +2427,10 @@ class ForecastStore:
         flat_lat = flat_lat[finite]
         flat_lon = flat_lon[finite]
 
-        lat_edges = np.linspace(SWISS_BOUNDS["min_lat"], SWISS_BOUNDS["max_lat"], self._grid_height + 1)
-        lon_edges = np.linspace(SWISS_BOUNDS["min_lon"], SWISS_BOUNDS["max_lon"], self._grid_width + 1)
+        self._expand_grid_bounds(flat_lat, flat_lon)
+        bounds = self.grid_bounds()
+        lat_edges = np.linspace(bounds["min_lat"], bounds["max_lat"], self._grid_height + 1)
+        lon_edges = np.linspace(bounds["min_lon"], bounds["max_lon"], self._grid_width + 1)
 
         val_sum, _, _ = np.histogram2d(flat_lat, flat_lon, bins=[lat_edges, lon_edges], weights=flat_values)
         val_count, _, _ = np.histogram2d(flat_lat, flat_lon, bins=[lat_edges, lon_edges])
@@ -2427,6 +2441,21 @@ class ForecastStore:
         grid = np.flipud(grid)
         grid = self._fill_nan_with_neighbors(grid)
         return grid
+
+    def _expand_grid_bounds(self, lat: np.ndarray, lon: np.ndarray) -> None:
+        if lat.size == 0 or lon.size == 0:
+            return
+        lat_min = float(np.nanmin(lat))
+        lat_max = float(np.nanmax(lat))
+        lon_min = float(np.nanmin(lon))
+        lon_max = float(np.nanmax(lon))
+        if not (np.isfinite(lat_min) and np.isfinite(lat_max) and np.isfinite(lon_min) and np.isfinite(lon_max)):
+            return
+        with self._grid_bounds_guard:
+            self._grid_bounds["min_lat"] = float(min(self._grid_bounds["min_lat"], lat_min))
+            self._grid_bounds["max_lat"] = float(max(self._grid_bounds["max_lat"], lat_max))
+            self._grid_bounds["min_lon"] = float(min(self._grid_bounds["min_lon"], lon_min))
+            self._grid_bounds["max_lon"] = float(max(self._grid_bounds["max_lon"], lon_max))
 
     @staticmethod
     def _extract_lat_lon(data_array, value_shape: Tuple[int, ...]) -> Tuple[np.ndarray, np.ndarray]:

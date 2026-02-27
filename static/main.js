@@ -84,7 +84,7 @@ function initMap() {
     },
     center: [8.25, 46.8],
     zoom: 7.2,
-    minZoom: 5,
+    minZoom: 2,
     maxZoom: 12,
   });
   map.addControl(
