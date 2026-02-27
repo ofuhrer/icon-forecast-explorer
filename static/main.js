@@ -1,10 +1,16 @@
-import { fetchJson } from "/js/api.js";
-import { renderMeteogram as drawMeteogram, seriesHasMissingValues, SERIES_TYPES } from "/js/meteogram.js?v=20260225i";
+let fetchJson = null;
+let drawMeteogram = null;
+let seriesHasMissingValues = null;
+let SERIES_TYPES = ["control", "p10", "p90"];
+import { formatInit, validTimeFromInitAndLead, formatSwissLocal, formatLegendValue } from "/js/formatting.js";
+import { filterLeadsForTimeOperator } from "/js/time_operator.js";
+import { selectedOptionText } from "/js/ui_text.js";
 
 const state = {
   metadata: null,
   datasetId: null,
   typeId: null,
+  timeOperator: "none",
   variableId: null,
   init: null,
   lead: 0,
@@ -23,6 +29,7 @@ const METADATA_REFRESH_WHILE_RUNNING_MS = 3_000;
 const els = {
   dataset: document.getElementById("datasetSelect"),
   type: document.getElementById("typeSelect"),
+  timeOperator: document.getElementById("timeOperatorSelect"),
   catalogInfo: document.getElementById("catalogInfo"),
   variable: document.getElementById("variableSelect"),
   init: document.getElementById("initSelect"),
@@ -38,44 +45,59 @@ const els = {
   meteogramPoint: document.getElementById("meteogramPoint"),
   meteogramCanvas: document.getElementById("meteogramCanvas"),
   fieldDebugInfo: document.getElementById("fieldDebugInfo"),
+  mapSummaryLine1: document.getElementById("mapSummaryLine1"),
+  mapSummaryLine2: document.getElementById("mapSummaryLine2"),
+  mapSummaryLine3: document.getElementById("mapSummaryLine3"),
+  mapSummaryLine4: document.getElementById("mapSummaryLine4"),
 };
 
-const map = new maplibregl.Map({
-  container: "map",
-  attributionControl: false,
-  style: {
-    version: 8,
-    sources: {
-      swissgray: {
-        type: "raster",
-        tiles: [
-          "https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.pixelkarte-grau/default/current/3857/{z}/{x}/{y}.jpeg",
-        ],
-        tileSize: 256,
+let map = null;
+
+function initMap() {
+  if (map) {
+    return map;
+  }
+  if (!window.maplibregl) {
+    throw new Error("Map library failed to load. Please reload and check internet access to unpkg.com.");
+  }
+  map = new maplibregl.Map({
+    container: "map",
+    attributionControl: false,
+    style: {
+      version: 8,
+      sources: {
+        swissgray: {
+          type: "raster",
+          tiles: [
+            "https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.pixelkarte-grau/default/current/3857/{z}/{x}/{y}.jpeg",
+          ],
+          tileSize: 256,
+        },
       },
+      layers: [
+        {
+          id: "swissgray",
+          type: "raster",
+          source: "swissgray",
+        },
+      ],
     },
-    layers: [
-      {
-        id: "swissgray",
-        type: "raster",
-        source: "swissgray",
-      },
-    ],
-  },
-  center: [8.25, 46.8],
-  zoom: 7.2,
-  minZoom: 5,
-  maxZoom: 12,
-});
-map.addControl(
-  new maplibregl.AttributionControl({
-    compact: true,
-    customAttribution:
-      '<a href="https://maplibre.org/" target="_blank" rel="noopener noreferrer">MapLibre</a> | Map: <a href="https://www.swisstopo.admin.ch/en" target="_blank" rel="noopener noreferrer">Swisstopo</a> | Data: <a href="https://www.meteoswiss.admin.ch/" target="_blank" rel="noopener noreferrer">MeteoSwiss</a>',
-  })
-);
-if (map.keyboard && typeof map.keyboard.disable === "function") {
-  map.keyboard.disable();
+    center: [8.25, 46.8],
+    zoom: 7.2,
+    minZoom: 5,
+    maxZoom: 12,
+  });
+  map.addControl(
+    new maplibregl.AttributionControl({
+      compact: true,
+      customAttribution:
+        '<a href="https://maplibre.org/" target="_blank" rel="noopener noreferrer">MapLibre</a> | Map: <a href="https://www.swisstopo.admin.ch/en" target="_blank" rel="noopener noreferrer">Swisstopo</a> | Data: <a href="https://www.meteoswiss.admin.ch/" target="_blank" rel="noopener noreferrer">MeteoSwiss</a>',
+    })
+  );
+  if (map.keyboard && typeof map.keyboard.disable === "function") {
+    map.keyboard.disable();
+  }
+  return map;
 }
 
 const tooltip = document.createElement("div");
@@ -98,6 +120,14 @@ let tileRequestVersion = 0;
 let tileRetryTimer = null;
 let tileRetryBackoffMs = 500;
 let tileUrlNonce = 0;
+const LOADING_OVERLAY_DELAY_MS = 350;
+const LOADING_OVERLAY_DELAY_ANIM_MS = 900;
+let loadingOverlayTimer = null;
+let loadingOverlayPending = false;
+let fieldUnavailable = false;
+let fieldDebugProbeTimer = null;
+let lastFieldDebugAtMs = 0;
+const FIELD_DEBUG_MIN_INTERVAL_MS = 900;
 let lastHover = null;
 let weatherLayerRetryTimer = null;
 let pendingWeatherForceRecreate = false;
@@ -108,8 +138,18 @@ let windVectorWarmupUntil = 0;
 let windVectorInFlight = false;
 let windVectorInFlightKey = "";
 
+function sortedVariables(dataset) {
+  const vars = Array.isArray(dataset?.variables) ? [...dataset.variables] : [];
+  vars.sort((a, b) =>
+    String(a?.display_name || "").localeCompare(String(b?.display_name || ""), undefined, { sensitivity: "base" })
+  );
+  return vars;
+}
+
 async function bootstrap() {
+  await loadClientModules();
   const initialUrlState = parseUrlState();
+  initMap();
   await refreshMetadata({ preserveSelection: false });
   applyUrlState(initialUrlState);
   bindEvents();
@@ -154,6 +194,20 @@ async function bootstrap() {
   scheduleMetadataPoll();
 }
 
+async function loadClientModules() {
+  if (fetchJson && drawMeteogram && typeof seriesHasMissingValues === "function") {
+    return;
+  }
+  const apiModule = await import("/js/api.js");
+  const meteogramModule = await import("/js/meteogram.js?v=20260225i");
+  fetchJson = apiModule.fetchJson;
+  drawMeteogram = meteogramModule.renderMeteogram;
+  seriesHasMissingValues = meteogramModule.seriesHasMissingValues;
+  SERIES_TYPES = Array.isArray(meteogramModule.SERIES_TYPES)
+    ? meteogramModule.SERIES_TYPES
+    : ["control", "p10", "p90"];
+}
+
 function scheduleMetadataPoll() {
   if (metadataPollTimer) {
     clearTimeout(metadataPollTimer);
@@ -190,16 +244,23 @@ function populateControls(metadata) {
     .join("");
 
   const selectedDataset = datasets[0];
+  const selectedVariables = sortedVariables(selectedDataset);
   const selectedTypes = selectedDataset.types || [{ type_id: "control", display_name: "Control" }];
   state.typeId = selectedTypes[0].type_id;
   els.type.innerHTML = selectedTypes
     .map((t) => `<option value="${t.type_id}">${t.display_name}</option>`)
     .join("");
-  state.variableId = selectedDataset.variables[0].variable_id;
+  state.variableId = selectedVariables[0]?.variable_id || null;
+  const timeOperators = metadata.time_operators || selectedDataset.time_operators || [{ time_operator: "none", display_name: "None" }];
+  els.timeOperator.innerHTML = timeOperators
+    .map((op) => `<option value="${op.time_operator}">${op.display_name}</option>`)
+    .join("");
+  state.timeOperator = timeOperators[0]?.time_operator || "none";
+  els.timeOperator.value = state.timeOperator;
   state.initToLeads = selectedDataset.init_to_leads || {};
   state.expectedInitToLeads = selectedDataset.expected_init_to_leads || {};
   state.leadHours = selectedDataset.lead_hours || [];
-  els.variable.innerHTML = selectedDataset.variables
+  els.variable.innerHTML = selectedVariables
     .map((v) => `<option value="${v.variable_id}">${v.display_name}</option>`)
     .join("");
 
@@ -212,6 +273,7 @@ function populateControls(metadata) {
   updateAnimationUi();
   renderLegend();
   renderRefreshStatus();
+  renderMapSummary();
 }
 
 async function refreshMetadata({ preserveSelection }) {
@@ -219,6 +281,7 @@ async function refreshMetadata({ preserveSelection }) {
   const previous = {
     datasetId: state.datasetId,
     typeId: state.typeId,
+    timeOperator: state.timeOperator,
     variableId: state.variableId,
     init: state.init,
     lead: state.lead,
@@ -237,6 +300,7 @@ async function refreshMetadata({ preserveSelection }) {
     els.dataset.value = state.datasetId;
     const activeDataset = datasets.find((d) => d.dataset_id === state.datasetId) || datasets[0];
     if (activeDataset) {
+      const activeVariables = sortedVariables(activeDataset);
       const activeTypes = activeDataset.types || [{ type_id: "control", display_name: "Control" }];
       els.type.innerHTML = activeTypes
         .map((t) => `<option value="${t.type_id}">${t.display_name}</option>`)
@@ -248,15 +312,29 @@ async function refreshMetadata({ preserveSelection }) {
       }
       els.type.value = state.typeId;
 
-      els.variable.innerHTML = activeDataset.variables
+      const timeOperators =
+        metadata.time_operators || activeDataset.time_operators || [{ time_operator: "none", display_name: "None" }];
+      els.timeOperator.innerHTML = timeOperators
+        .map((op) => `<option value="${op.time_operator}">${op.display_name}</option>`)
+        .join("");
+      if (timeOperators.some((op) => op.time_operator === previous.timeOperator)) {
+        state.timeOperator = previous.timeOperator;
+      } else {
+        state.timeOperator = timeOperators[0]?.time_operator || "none";
+      }
+      els.timeOperator.value = state.timeOperator;
+
+      els.variable.innerHTML = activeVariables
         .map((v) => `<option value="${v.variable_id}">${v.display_name}</option>`)
         .join("");
       state.initToLeads = activeDataset.init_to_leads || {};
       state.expectedInitToLeads = activeDataset.expected_init_to_leads || {};
       state.leadHours = activeDataset.lead_hours || [];
 
-      if (activeDataset.variables.some((v) => v.variable_id === previous.variableId)) {
+      if (activeVariables.some((v) => v.variable_id === previous.variableId)) {
         state.variableId = previous.variableId;
+      } else if (activeVariables[0]) {
+        state.variableId = activeVariables[0].variable_id;
       }
       els.variable.value = state.variableId;
 
@@ -277,20 +355,22 @@ async function refreshMetadata({ preserveSelection }) {
       setLeadChoicesForCurrentInit(false);
       updateAnimationUi();
       renderLegend();
+      renderMapSummary();
     }
   }
 
-  const previousKey = `${previous.datasetId}|${previous.typeId}|${previous.variableId}|${previous.init}|${previous.lead}`;
-  const currentKey = `${state.datasetId}|${state.typeId}|${state.variableId}|${state.init}|${state.lead}`;
+  const previousKey = `${previous.datasetId}|${previous.typeId}|${previous.timeOperator}|${previous.variableId}|${previous.init}|${previous.lead}`;
+  const currentKey = `${state.datasetId}|${state.typeId}|${state.timeOperator}|${state.variableId}|${state.init}|${state.lead}`;
   const shouldReloadTiles = !preserveSelection || previousKey !== currentKey;
   if (isMapStyleReady() && shouldReloadTiles) {
     addOrReplaceWeatherLayer({ forceRecreateSource: true });
   }
-  if (state.pinnedPoint && (!preserveSelection || previousKey !== currentKey)) {
-    loadSeriesForPinnedPoint();
-  }
-  updateUrlState();
-  renderRefreshStatus();
+    if (state.pinnedPoint && (!preserveSelection || previousKey !== currentKey)) {
+      loadSeriesForPinnedPoint();
+    }
+    updateUrlState();
+    renderRefreshStatus();
+    renderMapSummary();
 }
 
 function bindEvents() {
@@ -298,6 +378,7 @@ function bindEvents() {
     stopAnimation();
     state.datasetId = els.dataset.value;
     const dataset = state.metadata.datasets.find((d) => d.dataset_id === state.datasetId);
+    const datasetVariables = sortedVariables(dataset);
     const datasetTypes = dataset.types || [{ type_id: "control", display_name: "Control" }];
     els.type.innerHTML = datasetTypes
       .map((t) => `<option value="${t.type_id}">${t.display_name}</option>`)
@@ -306,10 +387,17 @@ function bindEvents() {
     state.initToLeads = dataset.init_to_leads || {};
     state.expectedInitToLeads = dataset.expected_init_to_leads || {};
     state.leadHours = dataset.lead_hours || [];
-    els.variable.innerHTML = dataset.variables
+    els.variable.innerHTML = datasetVariables
       .map((v) => `<option value="${v.variable_id}">${v.display_name}</option>`)
       .join("");
-    state.variableId = dataset.variables[0].variable_id;
+    state.variableId = datasetVariables[0]?.variable_id || null;
+    const timeOperators =
+      state.metadata.time_operators || dataset.time_operators || [{ time_operator: "none", display_name: "None" }];
+    els.timeOperator.innerHTML = timeOperators
+      .map((op) => `<option value="${op.time_operator}">${op.display_name}</option>`)
+      .join("");
+    state.timeOperator = timeOperators[0]?.time_operator || "none";
+    els.timeOperator.value = state.timeOperator;
     const initTimes = dataset.init_times || [];
     state.init = selectDefaultInit(dataset.dataset_id, initTimes, state.initToLeads);
     renderInitOptions(dataset, state.init);
@@ -334,9 +422,21 @@ function bindEvents() {
     updateUrlState();
   });
 
+  els.timeOperator.addEventListener("change", () => {
+    stopAnimation();
+    state.timeOperator = els.timeOperator.value || "none";
+    setLeadChoicesForCurrentInit(false);
+    addOrReplaceWeatherLayer({ forceRecreateSource: true });
+    if (state.pinnedPoint) {
+      loadSeriesForPinnedPoint();
+    }
+    updateUrlState();
+  });
+
   els.variable.addEventListener("change", () => {
     stopAnimation();
     state.variableId = els.variable.value;
+    setLeadChoicesForCurrentInit(false);
     renderLegend();
     addOrReplaceWeatherLayer({ forceRecreateSource: true });
     if (shouldShowWindVectors()) {
@@ -393,17 +493,24 @@ function bindEvents() {
 function updateLeadLabel() {
   if (!state.init) {
     els.leadText.textContent = "-";
-    els.validTimeText.textContent = "-";
+    if (els.validTimeText) {
+      els.validTimeText.textContent = "-";
+    }
+    renderMapSummary();
     return;
   }
   const displayLead = leadForDisplay(state.lead);
   const validDate = validTimeFromInitAndLead(state.init, displayLead);
   els.leadText.textContent = `+${displayLead} h`;
-  els.validTimeText.textContent = formatSwissLocal(validDate);
+  if (els.validTimeText) {
+    els.validTimeText.textContent = formatSwissLocal(validDate);
+  }
+  renderMapSummary();
 }
 
 function setLeadChoicesForCurrentInit(resetToFirst) {
-  const leadsForInit = state.initToLeads[state.init] || state.leadHours || [];
+  const rawLeadsForInit = state.initToLeads[state.init] || state.leadHours || [];
+  const leadsForInit = filterLeadsForTimeOperator(rawLeadsForInit, state.timeOperator, leadForDisplay);
   state.leadHours = leadsForInit;
 
   if (leadsForInit.length === 0) {
@@ -551,7 +658,7 @@ function weatherTileUrl() {
     state.variableId
   )}/${encodeURIComponent(state.init)}/${state.lead}/{z}/{x}/{y}.png?type_id=${encodeURIComponent(
     state.typeId || "control"
-  )}&_r=${nonce}`;
+  )}&time_operator=${encodeURIComponent(state.timeOperator || "none")}&_r=${nonce}`;
 }
 
 function addOrReplaceWeatherLayer({ forceRecreateSource = false } = {}) {
@@ -592,12 +699,13 @@ function addOrReplaceWeatherLayer({ forceRecreateSource = false } = {}) {
   }
 
   tileRequestVersion += 1;
+  fieldUnavailable = false;
   if (forceRecreateSource) {
     tileUrlNonce += 1;
   }
   clearTileRetry();
   setTileLoadingVisible(true);
-  loadFieldDebugInfo(tileRequestVersion);
+  maybeLoadFieldDebugInfo(tileRequestVersion);
   if (shouldShowWindVectors()) {
     // Avoid showing stale arrows while new type/lead vectors load.
     clearWindVectorLayer();
@@ -667,15 +775,19 @@ function onMapSourceData(event) {
   }
   if (event.isSourceLoaded) {
     weatherSourceLoading = false;
+    fieldUnavailable = false;
     tileRetryBackoffMs = 500;
     clearTileRetry();
+    clearFieldDebugProbe();
     setTileLoadingVisible(false);
-    loadFieldDebugInfo(tileRequestVersion);
+    maybeLoadFieldDebugInfo(tileRequestVersion);
     refreshHoverValueIfNeeded();
     scheduleWindVectorUpdate();
   } else {
     weatherSourceLoading = true;
-    setTileLoadingVisible(true);
+    if (!fieldUnavailable) {
+      setTileLoadingVisible(true);
+    }
   }
 }
 
@@ -773,6 +885,7 @@ function windRequestKey() {
   return [
     state.datasetId,
     state.typeId || "control",
+    state.timeOperator || "none",
     state.init,
     String(state.lead),
     Number(map.getZoom()).toFixed(2),
@@ -859,7 +972,9 @@ async function updateWindVectors() {
   windVectorInFlightKey = requestKey;
   const url = `/api/wind-vectors?dataset_id=${encodeURIComponent(state.datasetId)}&type_id=${encodeURIComponent(
     state.typeId || "control"
-  )}&init=${encodeURIComponent(state.init)}&lead=${state.lead}&min_lat=${bounds.getSouth()}&max_lat=${bounds.getNorth()}&min_lon=${bounds.getWest()}&max_lon=${bounds.getEast()}&zoom=${map.getZoom()}`;
+  )}&time_operator=${encodeURIComponent(state.timeOperator || "none")}&init=${encodeURIComponent(
+    state.init
+  )}&lead=${state.lead}&min_lat=${bounds.getSouth()}&max_lat=${bounds.getNorth()}&min_lon=${bounds.getWest()}&max_lon=${bounds.getEast()}&zoom=${map.getZoom()}`;
   try {
     const payload = await fetchJson(url, { signal: windVectorAbortController.signal, timeoutMs: 12000 });
     if (requestVersion !== windVectorRequestVersion) {
@@ -896,7 +1011,7 @@ async function updateWindVectors() {
 }
 
 function refreshHoverValueIfNeeded() {
-  if (!lastHover || tooltip.style.display === "none") {
+  if (!lastHover || tooltip.style.display === "none" || state.isAnimating) {
     return;
   }
   requestHoverValue(lastHover.lat, lastHover.lon);
@@ -912,7 +1027,7 @@ async function requestHoverValue(lat, lon) {
       state.typeId || "control"
     )}&variable_id=${encodeURIComponent(state.variableId)}&init=${encodeURIComponent(
       state.init
-    )}&lead=${state.lead}&lat=${lat}&lon=${lon}`;
+    )}&lead=${state.lead}&time_operator=${encodeURIComponent(state.timeOperator || "none")}&lat=${lat}&lon=${lon}`;
     const data = await fetchJson(url, { signal: abortController.signal });
     const text = `${data.value.toFixed(2)} ${unitForVariable(state.variableId)}`;
     tooltip.textContent = text;
@@ -927,23 +1042,60 @@ function onMapError(event) {
   if (!event || event.sourceId !== "weather-source" || !event.error) {
     return;
   }
+  if (fieldUnavailable) {
+    return;
+  }
   const status = Number(event.error.status || event.error.statusCode || event.error?.response?.status);
   if (status === 503) {
+    scheduleFieldDebugProbe(tileRequestVersion);
     scheduleTileRetry();
   }
 }
 
 function setTileLoadingVisible(visible) {
+  if (fieldUnavailable && visible) {
+    return;
+  }
+  if (loadingOverlayTimer) {
+    clearTimeout(loadingOverlayTimer);
+    loadingOverlayTimer = null;
+  }
   if (visible) {
-    els.tileFetchStatus.textContent = "Fetching tiles...";
-    els.tileFetchStatus.classList.add("loading");
+    loadingOverlayPending = true;
+    const delayMs = state.isAnimating ? LOADING_OVERLAY_DELAY_ANIM_MS : LOADING_OVERLAY_DELAY_MS;
+    loadingOverlayTimer = setTimeout(() => {
+      loadingOverlayTimer = null;
+      if (!loadingOverlayPending || fieldUnavailable) {
+        return;
+      }
+      els.tileFetchStatus.textContent = "Loading...";
+      els.tileFetchStatus.classList.add("loading");
+    }, delayMs);
   } else {
-    els.tileFetchStatus.textContent = "Tiles idle";
+    loadingOverlayPending = false;
+    els.tileFetchStatus.textContent = "";
     els.tileFetchStatus.classList.remove("loading");
   }
 }
 
+function setTileUnavailable(reason = "Tiles unavailable") {
+  fieldUnavailable = true;
+  weatherSourceLoading = false;
+  loadingOverlayPending = false;
+  if (loadingOverlayTimer) {
+    clearTimeout(loadingOverlayTimer);
+    loadingOverlayTimer = null;
+  }
+  clearTileRetry();
+  clearFieldDebugProbe();
+  els.tileFetchStatus.textContent = reason;
+  els.tileFetchStatus.classList.add("loading");
+}
+
 function scheduleTileRetry() {
+  if (fieldUnavailable) {
+    return;
+  }
   if (tileRetryTimer) {
     return;
   }
@@ -951,6 +1103,9 @@ function scheduleTileRetry() {
   tileRetryTimer = setTimeout(() => {
     tileRetryTimer = null;
     if (requestVersion !== tileRequestVersion) {
+      return;
+    }
+    if (fieldUnavailable) {
       return;
     }
     const source = map.getSource("weather-source");
@@ -971,6 +1126,39 @@ function clearTileRetry() {
   }
 }
 
+function scheduleFieldDebugProbe(requestVersion) {
+  if (state.isAnimating) {
+    return;
+  }
+  if (fieldDebugProbeTimer) {
+    return;
+  }
+  fieldDebugProbeTimer = setTimeout(() => {
+    fieldDebugProbeTimer = null;
+    loadFieldDebugInfo(requestVersion);
+  }, 250);
+}
+
+function clearFieldDebugProbe() {
+  if (fieldDebugProbeTimer) {
+    clearTimeout(fieldDebugProbeTimer);
+    fieldDebugProbeTimer = null;
+  }
+}
+
+function maybeLoadFieldDebugInfo(requestVersion, { force = false } = {}) {
+  if (!state.isAnimating || force) {
+    loadFieldDebugInfo(requestVersion);
+    return;
+  }
+  const now = Date.now();
+  if (now - lastFieldDebugAtMs < FIELD_DEBUG_MIN_INTERVAL_MS) {
+    return;
+  }
+  lastFieldDebugAtMs = now;
+  loadFieldDebugInfo(requestVersion);
+}
+
 async function loadFieldDebugInfo(requestVersion) {
   if (!els.fieldDebugInfo) {
     return;
@@ -988,14 +1176,26 @@ async function loadFieldDebugInfo(requestVersion) {
     const payload = await fetchJson(
       `/api/field-debug?dataset_id=${encodeURIComponent(datasetId)}&type_id=${encodeURIComponent(
         typeId
-      )}&variable_id=${encodeURIComponent(variableId)}&init=${encodeURIComponent(init)}&lead=${lead}`,
+      )}&variable_id=${encodeURIComponent(variableId)}&init=${encodeURIComponent(init)}&lead=${lead}&time_operator=${encodeURIComponent(
+        state.timeOperator || "none"
+      )}`,
       { timeoutMs: 4000 }
     );
     if (requestVersion !== tileRequestVersion) {
       return;
     }
     if (payload?.status === "loading" || !payload?.debug) {
-      els.fieldDebugInfo.textContent = "Source: loading...";
+      if (!fieldUnavailable) {
+        els.fieldDebugInfo.textContent = "Source: loading...";
+      }
+      return;
+    }
+    if (payload?.status === "error") {
+      const msg = String(payload?.debug?.message || "asset unavailable");
+      els.fieldDebugInfo.textContent = `Source: unavailable (${msg})`;
+      weatherSourceLoading = false;
+      clearTileRetry();
+      setTileUnavailable("Asset unavailable");
       return;
     }
     const files = payload?.debug?.source_files || [];
@@ -1011,7 +1211,12 @@ async function loadFieldDebugInfo(requestVersion) {
       return;
     }
     const msg = String(_err?.message || "");
-    els.fieldDebugInfo.textContent = msg.includes("503") ? "Source: loading..." : "Source: unavailable";
+    if (msg.includes("503")) {
+      els.fieldDebugInfo.textContent = "Source: loading...";
+    } else {
+      els.fieldDebugInfo.textContent = "Source: unavailable";
+      setTileUnavailable("Source unavailable");
+    }
   }
 }
 
@@ -1076,6 +1281,31 @@ function stepAnimation() {
   updateUrlState();
 }
 
+function renderMapSummary() {
+  if (!els.mapSummaryLine1 || !els.mapSummaryLine2 || !els.mapSummaryLine3 || !els.mapSummaryLine4) {
+    return;
+  }
+  const dataset = state.metadata?.datasets?.find((d) => d.dataset_id === state.datasetId);
+  const variable = dataset?.variables?.find((v) => v.variable_id === state.variableId);
+  const variableName = variable?.display_name || selectedOptionText(els.variable, "-");
+  const gribName = String(variable?.grib_name || variable?.variable_id || "-");
+  const unitText = String(variable?.display_unit || variable?.unit || variable?.standard_unit || "").trim();
+  const modelText = dataset?.display_name || selectedOptionText(els.dataset, "-");
+  const forecastText = state.init ? formatInit(state.init).replace(":00 UTC", " UTC") : "-";
+  const displayLead = leadForDisplay(state.lead);
+  const validDate = state.init ? validTimeFromInitAndLead(state.init, displayLead) : null;
+  const validText = validDate ? formatSwissLocal(validDate) : "-";
+  const statisticText = selectedOptionText(els.type, "-");
+  const timeOperatorText = selectedOptionText(els.timeOperator, "None");
+
+  els.mapSummaryLine1.textContent = unitText
+    ? `${variableName} (${gribName}, ${unitText})`
+    : `${variableName} (${gribName})`;
+  els.mapSummaryLine2.textContent = `${modelText} ${forecastText} +${displayLead}h`;
+  els.mapSummaryLine3.textContent = `Local time: ${validText}`;
+  els.mapSummaryLine4.textContent = `${statisticText}, ${timeOperatorText}`;
+}
+
 function prefetchUpcomingLeads(count) {
   if (!state.datasetId || !state.variableId || !state.init || state.leadHours.length === 0) {
     return;
@@ -1092,7 +1322,7 @@ function prefetchUpcomingLeads(count) {
 }
 
 function prefetchLead(lead) {
-  const key = `${state.datasetId}|${state.typeId}|${state.variableId}|${state.init}|${lead}`;
+  const key = `${state.datasetId}|${state.typeId}|${state.timeOperator}|${state.variableId}|${state.init}|${lead}`;
   const now = Date.now();
   const last = prefetchRecentAt.get(key);
   if (prefetchInFlight.has(key)) {
@@ -1107,7 +1337,7 @@ function prefetchLead(lead) {
       state.typeId || "control"
     )}&variable_id=${encodeURIComponent(state.variableId)}&init=${encodeURIComponent(
       state.init
-    )}&lead=${lead}`,
+    )}&lead=${lead}&time_operator=${encodeURIComponent(state.timeOperator || "none")}`,
     { timeoutMs: 12000 }
   )
     .catch(() => {})
@@ -1172,7 +1402,7 @@ function onMapMouseMove(e) {
   }
 
   hoverTimer = setTimeout(async () => {
-    if (weatherSourceLoading) {
+    if (weatherSourceLoading || state.isAnimating) {
       tooltip.textContent = "Loading...";
       return;
     }
@@ -1207,7 +1437,7 @@ async function loadSeriesForPinnedPoint() {
     state.variableId
   )}&init=${encodeURIComponent(state.init)}&lat=${lat}&lon=${lon}&types=${encodeURIComponent(
     typeParam
-  )}`;
+  )}&time_operator=${encodeURIComponent(state.timeOperator || "none")}`;
   try {
     const cachedData = await fetchJson(`${baseUrl}&cached_only=true`, { timeoutMs: 10000 });
     if (requestId !== state.seriesRequestId) {
@@ -1260,6 +1490,7 @@ function parseUrlState() {
   const parsed = {
     datasetId: p.get("model") || null,
     typeId: p.get("stat") || null,
+    timeOperator: p.get("op") || null,
     variableId: p.get("var") || null,
     init: p.get("run") || null,
     lead: p.get("lead") != null ? Number(p.get("lead")) : null,
@@ -1294,14 +1525,27 @@ function applyUrlState(urlState) {
     types[0].type_id;
   els.type.value = state.typeId;
 
-  els.variable.innerHTML = ds.variables
+  const timeOperators = state.metadata.time_operators || ds.time_operators || [{ time_operator: "none", display_name: "None" }];
+  els.timeOperator.innerHTML = timeOperators
+    .map((op) => `<option value="${op.time_operator}">${op.display_name}</option>`)
+    .join("");
+  state.timeOperator =
+    (urlState.timeOperator &&
+      timeOperators.some((op) => op.time_operator === urlState.timeOperator) &&
+      urlState.timeOperator) ||
+    (timeOperators[0]?.time_operator || "none");
+  els.timeOperator.value = state.timeOperator;
+
+  const dsVariables = sortedVariables(ds);
+  els.variable.innerHTML = dsVariables
     .map((v) => `<option value="${v.variable_id}">${v.display_name}</option>`)
     .join("");
   state.variableId =
     (urlState.variableId &&
-      ds.variables.some((v) => v.variable_id === urlState.variableId) &&
+      dsVariables.some((v) => v.variable_id === urlState.variableId) &&
       urlState.variableId) ||
-    ds.variables[0].variable_id;
+    dsVariables[0]?.variable_id ||
+    null;
   els.variable.value = state.variableId;
 
   state.initToLeads = ds.init_to_leads || {};
@@ -1342,6 +1586,7 @@ function applyUrlState(urlState) {
 
   renderLegend();
   renderRefreshStatus();
+  renderMapSummary();
 }
 
 function applyMapUrlState(urlState) {
@@ -1366,6 +1611,7 @@ function updateUrlState() {
   const params = new URLSearchParams();
   if (state.datasetId) params.set("model", state.datasetId);
   if (state.typeId) params.set("stat", state.typeId);
+  if (state.timeOperator && state.timeOperator !== "none") params.set("op", state.timeOperator);
   if (state.variableId) params.set("var", state.variableId);
   if (state.init) params.set("run", state.init);
   if (Number.isFinite(state.lead)) params.set("lead", String(state.lead));
@@ -1413,64 +1659,6 @@ function variableLeadDisplayOffsetHours() {
 
 function leadForDisplay(leadHours) {
   return Number(leadHours) + variableLeadDisplayOffsetHours();
-}
-
-function formatInit(initStr) {
-  const y = initStr.slice(0, 4);
-  const m = initStr.slice(4, 6);
-  const d = initStr.slice(6, 8);
-  const h = initStr.slice(8, 10);
-  return `${y}-${m}-${d} ${h}:00 UTC`;
-}
-
-function validTimeFromInitAndLead(initStr, leadHours) {
-  const y = Number(initStr.slice(0, 4));
-  const m = Number(initStr.slice(4, 6)) - 1;
-  const d = Number(initStr.slice(6, 8));
-  const h = Number(initStr.slice(8, 10));
-  const dt = new Date(Date.UTC(y, m, d, h, 0, 0));
-  dt.setUTCHours(dt.getUTCHours() + leadHours);
-  return dt;
-}
-
-function formatSwissLocal(date) {
-  const tz = "Europe/Zurich";
-  const weekday = new Intl.DateTimeFormat("en-US", {
-    timeZone: tz,
-    weekday: "short",
-  })
-    .format(date)
-    .replace(",", "");
-  const datePart = new Intl.DateTimeFormat("de-CH", {
-    timeZone: tz,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(date);
-  const timePart = new Intl.DateTimeFormat("de-CH", {
-    timeZone: tz,
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(date);
-  return `${weekday} ${datePart} ${timePart}`;
-}
-
-function formatLegendValue(value) {
-  if (!Number.isFinite(value)) {
-    return "-";
-  }
-  const abs = Math.abs(value);
-  let decimals = 0;
-  if (abs < 1) {
-    decimals = 2;
-  } else if (abs < 10) {
-    decimals = 1;
-  }
-  return value
-    .toFixed(decimals)
-    .replace(/\.0+$/, "")
-    .replace(/(\.\d*[1-9])0+$/, "$1");
 }
 
 bootstrap().catch((err) => {

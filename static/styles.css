@@ -88,16 +88,24 @@ button {
   font-weight: 600;
 }
 
-#validTimeBlock {
-  margin-top: 8px;
-  padding: 10px;
-  border: 1px solid var(--panel-border);
-  border-radius: 8px;
-  background: #f8fbff;
-  display: grid;
-  grid-template-columns: 74px 1fr;
-  align-items: center;
-  gap: 8px;
+#catalogInfo.loading::before,
+#tileFetchStatus.loading::before {
+  content: "";
+  display: inline-block;
+  width: 1rem;
+  height: 1rem;
+  margin-right: 0.45rem;
+  border: 2.4px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 999px;
+  vertical-align: -0.12rem;
+  animation: loadingSpin 0.8s linear infinite;
+}
+
+@keyframes loadingSpin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 #animationControls {
@@ -121,11 +129,6 @@ button {
   margin: 0;
 }
 
-#validTimeText {
-  margin: 0;
-}
-
-#validTimeText,
 #tileFetchStatus {
   font-size: var(--value-size);
   color: var(--muted);
@@ -134,10 +137,6 @@ button {
 
 #tileFetchStatus {
   min-height: 0;
-}
-
-#legendBlock {
-  margin-top: 8px;
 }
 
 #meteogramBlock {
@@ -205,15 +204,77 @@ button {
   position: relative;
 }
 
-#mapStatusOverlay {
+#mapSummaryOverlay {
   position: absolute;
   left: 12px;
-  bottom: 10px;
+  top: 10px;
+  z-index: 6;
+  pointer-events: none;
+  padding: 8px 10px;
+  border: 1px solid rgba(215, 221, 229, 0.95);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--text);
+  display: grid;
+  gap: 2px;
+  font-size: 0.76rem;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+  max-width: min(62vw, 520px);
+}
+
+#mapSummaryLine1,
+#mapSummaryLine2 {
+  font-weight: 600;
+}
+
+#mapSummaryLine3 {
+  color: #c62828;
+  font-weight: 700;
+}
+
+#mapSummaryLine4 {
+  color: var(--muted);
+}
+
+#mapLegendOverlay {
+  position: absolute;
+  left: 12px;
+  bottom: 18px;
+  z-index: 6;
+  pointer-events: none;
+  padding: 8px 10px;
+  border: 1px solid rgba(215, 221, 229, 0.95);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.9);
+  width: min(360px, calc(100vw - 32px));
+}
+
+#mapLegendOverlay #legendRamp {
+  margin: 0 0 6px 0;
+}
+
+#mapLegendOverlay #legendLabels {
+  font-size: 0.92rem;
+}
+
+#mapStatusOverlay {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
   z-index: 6;
   pointer-events: none;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 6px;
+  align-items: center;
+}
+
+#mapStatusOverlay #tileFetchStatus {
+  font-size: 1.2rem;
+  font-weight: 700;
+  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.9);
 }
 
 #catalogInfo {
@@ -256,5 +317,11 @@ button {
 
   .controlGrid {
     grid-template-columns: 1fr;
+  }
+
+  #mapLegendOverlay {
+    left: 8px;
+    bottom: 10px;
+    width: min(320px, calc(100vw - 16px));
   }
 }

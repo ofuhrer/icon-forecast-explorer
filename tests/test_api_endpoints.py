@@ -75,26 +75,31 @@ class _FakeStore:
     def variable_lead_display_offset_hours(self, variable_id):
         return 0
 
-    def get_cached_field(self, dataset_id, variable_id, init, lead, type_id="control"):
+    def get_cached_field(self, dataset_id, variable_id, init, lead, type_id="control", time_operator="none"):
         return np.full((380, 540), 5.0, dtype=np.float32)
 
-    def get_field(self, dataset_id, variable_id, init, lead, type_id="control"):
+    def get_field(self, dataset_id, variable_id, init, lead, type_id="control", time_operator="none"):
         return np.full((380, 540), 5.0, dtype=np.float32)
 
-    def get_cached_value(self, dataset_id, variable_id, init, lead, lat, lon, type_id="control"):
+    def get_cached_value(self, dataset_id, variable_id, init, lead, lat, lon, type_id="control", time_operator="none"):
         return 5.0
 
-    def queue_field_fetch(self, dataset_id, variable_id, init, lead, type_id="control"):
+    def queue_field_fetch(self, dataset_id, variable_id, init, lead, type_id="control", time_operator="none"):
         return True
 
-    def get_cached_wind_vectors(self, dataset_id, init, lead, type_id="control"):
+    def get_cached_wind_vectors(self, dataset_id, init, lead, type_id="control", time_operator="none"):
         return (
             np.full((380, 540), 10.0, dtype=np.float32),
             np.full((380, 540), 0.0, dtype=np.float32),
         )
 
-    def queue_wind_vector_fetch(self, dataset_id, init, lead, type_id="control"):
+    def queue_wind_vector_fetch(self, dataset_id, init, lead, type_id="control", time_operator="none"):
         return True
+
+    def get_field_failure(
+        self, dataset_id, variable_id, init_str, lead_hour, type_id="control", time_operator="none"
+    ):
+        return None
 
 
 class _EmptyMetaStore(_FakeStore):
@@ -113,16 +118,16 @@ class _CacheMissStore(_FakeStore):
         super().__init__()
         self.get_field_calls = 0
 
-    def get_cached_field(self, dataset_id, variable_id, init, lead, type_id="control"):
+    def get_cached_field(self, dataset_id, variable_id, init, lead, type_id="control", time_operator="none"):
         return None
 
-    def get_field(self, dataset_id, variable_id, init, lead, type_id="control"):
+    def get_field(self, dataset_id, variable_id, init, lead, type_id="control", time_operator="none"):
         self.get_field_calls += 1
         return np.full((380, 540), 5.0, dtype=np.float32)
 
 
 class _ValueMissStore(_FakeStore):
-    def get_cached_value(self, dataset_id, variable_id, init, lead, lat, lon, type_id="control"):
+    def get_cached_value(self, dataset_id, variable_id, init, lead, lat, lon, type_id="control", time_operator="none"):
         return None
 
 

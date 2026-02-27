@@ -19,7 +19,7 @@ from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
 
-from weather_data import SWISS_BOUNDS, ForecastStore
+from weather_data import SWISS_BOUNDS, ForecastStore, SUPPORTED_TIME_OPERATORS, TIME_OPERATORS
 
 TILE_SIZE = 256
 COLORMAP_MANIFEST_PATH = Path(__file__).resolve().parent / "colormaps" / "manifest.json"
@@ -100,6 +100,23 @@ _SERIES_KEY_LOCKS: Dict[tuple, threading.Lock] = {}
 _SERIES_KEY_LOCKS_GUARD = threading.Lock()
 
 
+def _validate_time_operator(value: str) -> str:
+    time_operator = str(value or "none").strip() or "none"
+    if time_operator not in SUPPORTED_TIME_OPERATORS:
+        raise HTTPException(status_code=400, detail=f"Unknown time_operator: {time_operator}")
+    return time_operator
+
+
+def _parse_requested_types(types: str) -> List[str]:
+    req_types = [t.strip() for t in str(types).split(",") if t.strip()]
+    if not req_types:
+        req_types = ["control"]
+    unknown_types = [t for t in req_types if t not in FORECAST_TYPE_IDS]
+    if unknown_types:
+        raise HTTPException(status_code=400, detail=f"Unknown type_id values: {', '.join(unknown_types)}")
+    return req_types
+
+
 @app.on_event("startup")
 def _startup() -> None:
     LOGGER.info("App startup")
@@ -126,10 +143,15 @@ def metadata() -> Dict[str, object]:
         default_leads = store.lead_hours_for_init(ds.dataset_id, init_times[0]) if init_times else []
         variables = []
         for var in store.variable_metas:
+            grib_name = store.variable_grib_name(var.variable_id)
             variables.append(
                 {
                     "variable_id": var.variable_id,
                     "display_name": var.display_name,
+                    "long_name": store.variable_long_name(var.variable_id),
+                    "grib_name": grib_name,
+                    "standard_unit": store.variable_standard_unit(var.variable_id),
+                    "display_unit": var.unit,
                     "unit": var.unit,
                     "range": [var.min_value, var.max_value],
                     "lead_time_display_offset_hours": int(store.variable_lead_display_offset_hours(var.variable_id)),
@@ -142,6 +164,7 @@ def metadata() -> Dict[str, object]:
                 "dataset_id": ds.dataset_id,
                 "display_name": ds.display_name,
                 "types": FORECAST_TYPES,
+                "time_operators": TIME_OPERATORS,
                 "refresh": store.refresh_status(ds.dataset_id),
                 "variables": variables,
                 "lead_hours": default_leads,
@@ -155,6 +178,7 @@ def metadata() -> Dict[str, object]:
     LOGGER.debug("Metadata served datasets=%d", len(datasets_payload))
     return {
         "datasets": datasets_payload,
+        "time_operators": TIME_OPERATORS,
         "init_times": first["init_times"],
         "lead_hours": first["lead_hours"],
         "init_to_leads": first["init_to_leads"],
@@ -169,13 +193,26 @@ def value(
     variable_id: str = Query(...),
     init: str = Query(...),
     lead: int = Query(..., ge=0),
+    time_operator: str = Query("none"),
     lat: float = Query(..., ge=-90, le=90),
     lon: float = Query(..., ge=-180, le=180),
 ) -> Dict[str, object]:
     try:
-        val = store.get_cached_value(dataset_id, variable_id, init, lead, lat=lat, lon=lon, type_id=type_id)
+        time_operator = _validate_time_operator(time_operator)
+        val = store.get_cached_value(
+            dataset_id,
+            variable_id,
+            init,
+            lead,
+            lat=lat,
+            lon=lon,
+            type_id=type_id,
+            time_operator=time_operator,
+        )
         if val is None:
-            queued = store.queue_field_fetch(dataset_id, variable_id, init, lead, type_id=type_id)
+            queued = store.queue_field_fetch(
+                dataset_id, variable_id, init, lead, type_id=type_id, time_operator=time_operator
+            )
             LOGGER.debug(
                 "Value cache miss dataset=%s type=%s var=%s init=%s lead=%s queued=%s",
                 dataset_id,
@@ -199,6 +236,7 @@ def value(
         "variable_id": variable_id,
         "init": init,
         "lead": lead,
+        "time_operator": time_operator,
         "lat": lat,
         "lon": lon,
         "value": round(val, 2),
@@ -212,9 +250,13 @@ def prefetch(
     variable_id: str = Query(...),
     init: str = Query(...),
     lead: int = Query(..., ge=0),
+    time_operator: str = Query("none"),
 ) -> Dict[str, object]:
     try:
-        queued = store.queue_field_fetch(dataset_id, variable_id, init, lead, type_id=type_id)
+        time_operator = _validate_time_operator(time_operator)
+        queued = store.queue_field_fetch(
+            dataset_id, variable_id, init, lead, type_id=type_id, time_operator=time_operator
+        )
         LOGGER.debug(
             "Prefetch request dataset=%s type=%s var=%s init=%s lead=%s queued=%s",
             dataset_id,
@@ -240,19 +282,41 @@ def field_debug(
     variable_id: str = Query(...),
     init: str = Query(...),
     lead: int = Query(..., ge=0),
+    time_operator: str = Query("none"),
 ) -> Dict[str, object]:
     try:
+        time_operator = _validate_time_operator(time_operator)
         info = store.get_cached_field_debug_info(
             dataset_id=dataset_id,
             variable_id=variable_id,
             init_str=init,
             lead_hour=lead,
             type_id=type_id,
+            time_operator=time_operator,
         )
     except ValueError as exc:
         LOGGER.warning("Field debug request invalid: %s", exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if info is None:
+        failure = store.get_field_failure(
+            dataset_id=dataset_id,
+            variable_id=variable_id,
+            init_str=init,
+            lead_hour=lead,
+            type_id=type_id,
+            time_operator=time_operator,
+        )
+        if failure is not None:
+            return {
+                "dataset_id": dataset_id,
+                "type_id": type_id,
+                "variable_id": variable_id,
+                "init": init,
+                "lead": lead,
+                "time_operator": time_operator,
+                "status": "error",
+                "debug": failure,
+            }
         LOGGER.debug(
             "Field debug cache miss dataset=%s type=%s var=%s init=%s lead=%s",
             dataset_id,
@@ -261,13 +325,14 @@ def field_debug(
             init,
             lead,
         )
-        store.queue_field_fetch(dataset_id, variable_id, init, lead, type_id=type_id)
+        store.queue_field_fetch(dataset_id, variable_id, init, lead, type_id=type_id, time_operator=time_operator)
         return {
             "dataset_id": dataset_id,
             "type_id": type_id,
             "variable_id": variable_id,
             "init": init,
             "lead": lead,
+            "time_operator": time_operator,
             "status": "loading",
             "debug": None,
         }
@@ -277,6 +342,7 @@ def field_debug(
         "variable_id": variable_id,
         "init": init,
         "lead": lead,
+        "time_operator": time_operator,
         "status": "ready",
         "debug": info,
     }
@@ -291,15 +357,12 @@ def series(
     lon: float = Query(..., ge=-180, le=180),
     types: str = Query("control,mean,median,p10,p90"),
     cached_only: bool = Query(True),
+    time_operator: str = Query("none"),
 ) -> Dict[str, object]:
-    req_types: List[str] = [t.strip() for t in types.split(",") if t.strip()]
-    if not req_types:
-        req_types = ["control"]
-    unknown_types = [t for t in req_types if t not in FORECAST_TYPE_IDS]
-    if unknown_types:
-        raise HTTPException(status_code=400, detail=f"Unknown type_id values: {', '.join(unknown_types)}")
+    req_types = _parse_requested_types(types)
+    time_operator = _validate_time_operator(time_operator)
 
-    key = _series_cache_key(dataset_id, variable_id, init, req_types, cached_only, lat, lon)
+    key = _series_cache_key(dataset_id, variable_id, init, req_types, cached_only, lat, lon, time_operator)
     cached_payload = _series_cache_get(key)
     if cached_payload is not None:
         return _series_payload_for_request(cached_payload, lat=lat, lon=lon, cache_hit=True)
@@ -317,6 +380,7 @@ def series(
             lon=lon,
             req_types=req_types,
             cached_only=cached_only,
+            time_operator=time_operator,
         )
         _series_cache_put(key, payload)
         return _series_payload_for_request(payload, lat=lat, lon=lon, cache_hit=False)
@@ -332,10 +396,24 @@ def tiles(
     x: int,
     y: int,
     type_id: str = Query("control"),
+    time_operator: str = Query("none"),
 ) -> Response:
     try:
-        field = store.get_cached_field(dataset_id, variable_id, init, lead, type_id=type_id)
+        time_operator = _validate_time_operator(time_operator)
+        field = store.get_cached_field(
+            dataset_id, variable_id, init, lead, type_id=type_id, time_operator=time_operator
+        )
         if field is None:
+            failure = store.get_field_failure(
+                dataset_id=dataset_id,
+                variable_id=variable_id,
+                init_str=init,
+                lead_hour=lead,
+                type_id=type_id,
+                time_operator=time_operator,
+            )
+            if failure is not None:
+                raise RuntimeError(str(failure.get("message", "Asset unavailable")))
             # Keep map interaction responsive even under background queue pressure:
             # fetch requested field synchronously (single-flight guarded in store).
             LOGGER.info(
@@ -349,7 +427,9 @@ def tiles(
                 x,
                 y,
             )
-            field = store.get_field(dataset_id, variable_id, init, lead, type_id=type_id)
+            field = store.get_field(
+                dataset_id, variable_id, init, lead, type_id=type_id, time_operator=time_operator
+            )
     except ValueError as exc:
         LOGGER.warning("Tile request invalid: %s", exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -390,16 +470,24 @@ def wind_vectors(
     min_lon: float = Query(...),
     max_lon: float = Query(...),
     zoom: float = Query(7.0),
+    time_operator: str = Query("none"),
 ) -> Dict[str, object]:
     try:
+        time_operator = _validate_time_operator(time_operator)
         # Match tile behavior: fetch synchronously on cache miss so vectors
         # appear immediately after switching to wind (no zoom needed).
         if hasattr(store, "get_wind_vectors"):
-            u_field, v_field = store.get_wind_vectors(dataset_id, init, lead, type_id=type_id)
+            u_field, v_field = store.get_wind_vectors(
+                dataset_id, init, lead, type_id=type_id, time_operator=time_operator
+            )
         else:
-            cached = store.get_cached_wind_vectors(dataset_id, init, lead, type_id=type_id)
+            cached = store.get_cached_wind_vectors(
+                dataset_id, init, lead, type_id=type_id, time_operator=time_operator
+            )
             if cached is None:
-                store.queue_wind_vector_fetch(dataset_id, init, lead, type_id=type_id)
+                store.queue_wind_vector_fetch(
+                    dataset_id, init, lead, type_id=type_id, time_operator=time_operator
+                )
                 return {"status": "loading", "vectors": [], "unit": "km/h"}
             u_field, v_field = cached
     except ValueError as exc:
@@ -600,6 +688,7 @@ def _series_cache_key(
     cached_only: bool,
     lat: float,
     lon: float,
+    time_operator: str,
 ) -> tuple:
     return (
         dataset_id,
@@ -609,6 +698,7 @@ def _series_cache_key(
         bool(cached_only),
         _bucket_coord(lat),
         _bucket_coord(lon),
+        str(time_operator),
     )
 
 
@@ -676,6 +766,7 @@ def _build_series_payload(
     lon: float,
     req_types: List[str],
     cached_only: bool,
+    time_operator: str,
 ) -> Dict[str, object]:
     leads = store.lead_hours_for_init(dataset_id, init)
     if not leads:
@@ -693,10 +784,12 @@ def _build_series_payload(
             try:
                 if cached_only:
                     v = store.get_cached_value(
-                        dataset_id, variable_id, init, lead, lat=lat, lon=lon, type_id=t
+                        dataset_id, variable_id, init, lead, lat=lat, lon=lon, type_id=t, time_operator=time_operator
                     )
                 else:
-                    v = store.get_value(dataset_id, variable_id, init, lead, lat=lat, lon=lon, type_id=t)
+                    v = store.get_value(
+                        dataset_id, variable_id, init, lead, lat=lat, lon=lon, type_id=t, time_operator=time_operator
+                    )
                 if v is None:
                     missing_counts[t] += 1
                     values_by_type[t].append(None)
@@ -725,6 +818,7 @@ def _build_series_payload(
         "lead_hours": [int(v) for v in leads],
         "valid_times_utc": valid_times_utc,
         "values": values_by_type,
+        "time_operator": time_operator,
         "diagnostics": {
             "cached_only": cached_only,
             "missing_counts": missing_counts,

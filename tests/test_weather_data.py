@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import numpy as np
 
@@ -40,10 +40,6 @@ class WeatherDataTests(unittest.TestCase):
         cloud_percent = store._normalize_variable_units(cloud_fraction, "clct", "fraction")
         np.testing.assert_allclose(cloud_percent, np.array([[25.0]], dtype=np.float32), atol=1e-3)
 
-        relhum_fraction = np.array([[0.82]], dtype=np.float32)
-        relhum_percent = store._normalize_variable_units(relhum_fraction, "relhum_2m", "1")
-        np.testing.assert_allclose(relhum_percent, np.array([[82.0]], dtype=np.float32), atol=1e-3)
-
         sunshine_seconds = np.array([[1800.0]], dtype=np.float32)
         sunshine_minutes = store._normalize_variable_units(sunshine_seconds, "dursun", "s")
         np.testing.assert_allclose(sunshine_minutes, np.array([[30.0]], dtype=np.float32), atol=1e-3)
@@ -56,6 +52,28 @@ class WeatherDataTests(unittest.TestCase):
         rain_mm = store._normalize_variable_units(rain_m, "rain_gsp", "m")
         np.testing.assert_allclose(rain_mm, np.array([[3.0]], dtype=np.float32), atol=1e-3)
 
+    def test_extract_units_hint_uses_grib_units_and_standard_fallback(self):
+        store = ForecastStore()
+
+        class _FakeArrayWithGribUnits:
+            attrs = {"GRIB_units": "s"}
+
+        class _FakeArrayWithoutUnits:
+            attrs = {}
+
+        units_from_grib = store._extract_units_hint(_FakeArrayWithGribUnits(), "DURSUN")
+        self.assertEqual(units_from_grib, "s")
+
+        units_from_standard = store._extract_units_hint(_FakeArrayWithoutUnits(), "PS")
+        self.assertEqual(units_from_standard, "Pa")
+
+    def test_dursun_normalization_with_missing_units_uses_range_fallback(self):
+        store = ForecastStore()
+        # Represents a full hour in seconds but missing explicit unit metadata.
+        sunshine_seconds = np.array([[3600.0]], dtype=np.float32)
+        sunshine_minutes = store._normalize_variable_units(sunshine_seconds, "dursun", "")
+        np.testing.assert_allclose(sunshine_minutes, np.array([[60.0]], dtype=np.float32), atol=1e-3)
+
     def test_merge_catalogs_keeps_cached_on_regression(self):
         store = ForecastStore()
         cfg = DatasetMeta(
@@ -67,15 +85,18 @@ class WeatherDataTests(unittest.TestCase):
             fallback_cycle_hours=3,
             fallback_lead_hours=[0, 1, 2],
         )
+        now = datetime.utcnow().replace(minute=0, second=0, microsecond=0)
+        run_hours = [0, 3, 6, 9, 12, 15, 18, 21]
+        init_times = [(now - timedelta(hours=h)).strftime("%Y%m%d%H") for h in run_hours]
         cached = {
-            "init_times": [f"20260224{h:02d}" for h in (21, 18, 15, 12, 9, 6, 3, 0)],
+            "init_times": init_times,
             "lead_hours": [0, 1, 2],
-            "init_to_leads": {f"20260224{h:02d}": [0, 1, 2] for h in (21, 18, 15, 12, 9, 6, 3, 0)},
+            "init_to_leads": {init: [0, 1, 2] for init in init_times},
         }
         discovered = {
-            "init_times": ["2026022421"],
+            "init_times": [init_times[0]],
             "lead_hours": [0, 1],
-            "init_to_leads": {"2026022421": [0, 1]},
+            "init_to_leads": {init_times[0]: [0, 1]},
         }
 
         merged = store._merge_catalogs(cfg, cached, discovered)
@@ -169,6 +190,40 @@ class WeatherDataTests(unittest.TestCase):
 
         offset = ForecastStore._extract_display_lead_offset_hours(_FakeArray(), requested_lead_hour=4)
         self.assertEqual(offset, 1)
+
+    def test_time_operator_window_is_trailing_and_uses_available_leads(self):
+        store = ForecastStore()
+        dataset_id = "icon-ch1-eps-control"
+        init = store.init_times(dataset_id)[0]
+        with patch.object(store, "lead_hours_for_init", return_value=[0, 1, 3, 4, 5]):
+            window, kind = store._time_operator_window(dataset_id, init, 5, "avg_3h")
+        self.assertEqual(kind, "avg")
+        self.assertEqual(window, [3, 4, 5])
+
+    def test_time_operator_field_averages_base_fields(self):
+        store = ForecastStore()
+        dataset_id = "icon-ch1-eps-control"
+        init = store.init_times(dataset_id)[0]
+        base0 = np.ones((2, 2), dtype=np.float32) * 2.0
+        base1 = np.ones((2, 2), dtype=np.float32) * 4.0
+        with patch.object(store, "lead_hours_for_init", return_value=[0, 1]):
+            with patch.object(
+                store,
+                "get_field",
+                side_effect=lambda dataset_id, variable_id, init_str, lead_hour, type_id="control", time_operator="none": (
+                    base0 if lead_hour == 0 else base1
+                ),
+            ):
+                field, info = store._compute_time_operated_field(
+                    dataset_id=dataset_id,
+                    variable_id="t_2m",
+                    init_str=init,
+                    lead_hour=1,
+                    type_id="control",
+                    time_operator="avg_3h",
+                )
+        np.testing.assert_allclose(field, np.ones((2, 2), dtype=np.float32) * 3.0)
+        self.assertEqual(info["window_leads"], [0, 1])
 
 
 if __name__ == "__main__":

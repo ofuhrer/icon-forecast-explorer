@@ -11,14 +11,14 @@ class _FakeStore:
     def lead_hours_for_init(self, dataset_id, init):
         return [0, 1, 2]
 
-    def get_cached_value(self, dataset_id, variable_id, init, lead, lat, lon, type_id="control"):
+    def get_cached_value(self, dataset_id, variable_id, init, lead, lat, lon, type_id="control", time_operator="none"):
         if lead == 1 and type_id == "p10":
             raise RuntimeError("cached gap")
         if lead == 2:
             return None
         return 5.0 + lead
 
-    def get_value(self, dataset_id, variable_id, init, lead, lat, lon, type_id="control"):
+    def get_value(self, dataset_id, variable_id, init, lead, lat, lon, type_id="control", time_operator="none"):
         if lead == 1 and type_id == "control":
             raise RuntimeError("full fetch failed")
         return 10.0 + lead
@@ -28,10 +28,10 @@ class _ErrorStore:
     def lead_hours_for_init(self, dataset_id, init):
         return [0, 1, 2]
 
-    def get_cached_value(self, dataset_id, variable_id, init, lead, lat, lon, type_id="control"):
+    def get_cached_value(self, dataset_id, variable_id, init, lead, lat, lon, type_id="control", time_operator="none"):
         raise RuntimeError(f"cached fail {type_id} {lead}")
 
-    def get_value(self, dataset_id, variable_id, init, lead, lat, lon, type_id="control"):
+    def get_value(self, dataset_id, variable_id, init, lead, lat, lon, type_id="control", time_operator="none"):
         raise RuntimeError(f"full fail {type_id} {lead}")
 
 
@@ -47,11 +47,11 @@ class _CountingStore:
     def lead_hours_for_init(self, dataset_id, init):
         return [0, 1]
 
-    def get_cached_value(self, dataset_id, variable_id, init, lead, lat, lon, type_id="control"):
+    def get_cached_value(self, dataset_id, variable_id, init, lead, lat, lon, type_id="control", time_operator="none"):
         self.calls += 1
         return 1.0 + lead
 
-    def get_value(self, dataset_id, variable_id, init, lead, lat, lon, type_id="control"):
+    def get_value(self, dataset_id, variable_id, init, lead, lat, lon, type_id="control", time_operator="none"):
         self.calls += 1
         return 2.0 + lead
 
@@ -194,12 +194,40 @@ class ApiSeriesTests(unittest.TestCase):
         self.assertEqual(counting_store.calls, 2)
 
     @unittest.skipIf(app_module is None, "fastapi app dependencies not available in current interpreter")
+    def test_series_cache_key_includes_time_operator(self):
+        counting_store = _CountingStore()
+        with patch.object(app_module, "store", counting_store):
+            payload1 = app_module.series(
+                dataset_id="icon-ch1-eps-control",
+                variable_id="t_2m",
+                init="2026022500",
+                lat=47.001,
+                lon=8.001,
+                types="control",
+                cached_only=True,
+                time_operator="none",
+            )
+            payload2 = app_module.series(
+                dataset_id="icon-ch1-eps-control",
+                variable_id="t_2m",
+                init="2026022500",
+                lat=47.001,
+                lon=8.001,
+                types="control",
+                cached_only=True,
+                time_operator="avg_3h",
+            )
+        self.assertFalse(payload1["diagnostics"]["cache_hit"])
+        self.assertFalse(payload2["diagnostics"]["cache_hit"])
+        self.assertEqual(counting_store.calls, 4)
+
+    @unittest.skipIf(app_module is None, "fastapi app dependencies not available in current interpreter")
     def test_series_key_locks_are_pruned(self):
         with patch.object(app_module, "SERIES_CACHE_MAX_ENTRIES", 1):
             for i in range(70):
-                key = ("d", "v", "i", ("control",), True, i, i)
+                key = ("d", "v", "i", ("control",), True, i, i, "none")
                 app_module._series_key_lock(key)
-            keep_key = ("d", "v", "i", ("control",), True, 0, 0)
+            keep_key = ("d", "v", "i", ("control",), True, 0, 0, "none")
             app_module._series_cache_put(keep_key, {"ok": True})
         self.assertLessEqual(len(app_module._SERIES_KEY_LOCKS), 64)
 

@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>ICON Forecast Explorer</title>
     <link href="https://unpkg.com/maplibre-gl@5.3.1/dist/maplibre-gl.css" rel="stylesheet" />
-    <link rel="stylesheet" href="/styles.css?v=20260225v" />
+    <link rel="stylesheet" href="/styles.css?v=20260227c" />
   </head>
   <body>
     <div id="app">
@@ -29,6 +29,10 @@
             <label for="typeSelect">Statistic</label>
             <select id="typeSelect"></select>
           </div>
+          <div class="controlRow">
+            <label for="timeOperatorSelect">Time Operator</label>
+            <select id="timeOperatorSelect"></select>
+          </div>
         </div>
 
         <label for="leadRange">Lead Time <span id="leadText"></span></label>
@@ -42,15 +46,6 @@
             <option value="300">4x</option>
           </select>
         </div>
-        <div id="validTimeBlock">
-          <div class="metaLabel">Valid Time</div>
-          <div id="validTimeText">-</div>
-        </div>
-        <details id="legendBlock" class="collapsible" open>
-          <summary class="metaLabel">Legend</summary>
-          <div id="legendRamp"></div>
-          <div id="legendLabels"></div>
-        </details>
         <details id="meteogramBlock" class="collapsible">
           <summary class="metaLabel">Meteogram (click map)</summary>
           <div id="meteogramPoint">-</div>
@@ -60,13 +55,23 @@
         <div id="fieldDebugInfo"></div>
       </aside>
       <main id="map">
+        <div id="mapSummaryOverlay" aria-live="polite">
+          <div id="mapSummaryLine1">-</div>
+          <div id="mapSummaryLine2">-</div>
+          <div id="mapSummaryLine3">-</div>
+          <div id="mapSummaryLine4">-</div>
+        </div>
+        <div id="mapLegendOverlay" aria-live="polite">
+          <div id="legendRamp"></div>
+          <div id="legendLabels"></div>
+        </div>
         <div id="mapStatusOverlay" aria-live="polite">
-          <div id="tileFetchStatus">Tiles idle</div>
+          <div id="tileFetchStatus"></div>
         </div>
       </main>
     </div>
 
     <script src="https://unpkg.com/maplibre-gl@5.3.1/dist/maplibre-gl.js"></script>
-    <script src="/main.js?v=20260225v" type="module"></script>
+    <script src="/main.js?v=20260227d" type="module"></script>
   </body>
 </html>
