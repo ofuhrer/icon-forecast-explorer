@@ -22,7 +22,7 @@ from PIL import Image
 from weather_data import SWISS_BOUNDS, ForecastStore, SUPPORTED_TIME_OPERATORS, TIME_OPERATORS
 
 TILE_SIZE = 256
-COLORMAP_MANIFEST_PATH = Path(__file__).resolve().parent / "colormaps" / "manifest.json"
+COLORMAP_MANIFEST_PATH = Path(__file__).resolve().parent / "colormaps.json"
 SERIES_CACHE_TTL_SECONDS = float(os.getenv("SERIES_CACHE_TTL_SECONDS", "120"))
 SERIES_CACHE_MAX_ENTRIES = int(os.getenv("SERIES_CACHE_MAX_ENTRIES", "512"))
 SERIES_LATLON_BUCKET_DEG = float(os.getenv("SERIES_LATLON_BUCKET_DEG", "0.01"))
