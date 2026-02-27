@@ -243,19 +243,21 @@ button {
   bottom: 18px;
   z-index: 6;
   pointer-events: none;
-  padding: 8px 10px;
+  padding: 5px 6px;
   border: 1px solid rgba(215, 221, 229, 0.95);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.9);
-  width: min(360px, calc(100vw - 32px));
+  width: min(180px, calc(100vw - 32px));
 }
 
 #mapLegendOverlay #legendRamp {
-  margin: 0 0 6px 0;
+  margin: 0 0 4px 0;
+  height: 8px;
+  border-radius: 4px;
 }
 
 #mapLegendOverlay #legendLabels {
-  font-size: 0.92rem;
+  font-size: 0.7rem;
 }
 
 #mapStatusOverlay {
@@ -322,6 +324,6 @@ button {
   #mapLegendOverlay {
     left: 8px;
     bottom: 10px;
-    width: min(320px, calc(100vw - 16px));
+    width: min(170px, calc(100vw - 16px));
   }
 }

@@ -6269,3 +6269,148 @@ weather_data.OGDRequestError: OGD fetch failed for variable=PRES_SFC ref=2026-02
 2026-02-27 03:21:22,799 DEBUG [icon_forecast] Metadata served datasets=2
 2026-02-27 03:21:26,743 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v6_icon-ch2-eps-control_p10_vmax_10m_u2_2026022618_005.npz bytes=311817
 2026-02-27 03:21:26,805 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v6_icon-ch2-eps-control_p10_vmax_10m_u2_opavg3h_2026022618_005.npz bytes=316212
+2026-02-27 03:21:42,981 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-27 03:21:52,812 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch2-eps-control', 'control', 'vmax_10m', 'avg_3h', '2026022618', 6)
+2026-02-27 03:21:52,818 DEBUG [icon_forecast] Prefetch request dataset=icon-ch2-eps-control type=control var=vmax_10m init=2026022618 lead=6 queued=True
+2026-02-27 03:21:52,947 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v6_icon-ch2-eps-control_control_vmax_10m_u2_opavg3h_2026022618_006.npz bytes=315697
+2026-02-27 03:21:53,690 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch2-eps-control', 'control', 'vmax_10m', 'avg_3h', '2026022618', 9)
+2026-02-27 03:21:53,698 DEBUG [icon_forecast] Prefetch request dataset=icon-ch2-eps-control type=control var=vmax_10m init=2026022618 lead=9 queued=True
+2026-02-27 03:21:53,869 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v6_icon-ch2-eps-control_control_vmax_10m_u2_opavg3h_2026022618_009.npz bytes=315868
+2026-02-27 03:21:54,598 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch2-eps-control', 'control', 'vmax_10m', 'avg_3h', '2026022618', 12)
+2026-02-27 03:21:54,607 DEBUG [icon_forecast] Prefetch request dataset=icon-ch2-eps-control type=control var=vmax_10m init=2026022618 lead=12 queued=True
+2026-02-27 03:21:54,746 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v6_icon-ch2-eps-control_control_vmax_10m_u2_opavg3h_2026022618_012.npz bytes=316591
+2026-02-27 03:21:55,518 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch2-eps-control', 'control', 'vmax_10m', 'avg_3h', '2026022618', 15)
+2026-02-27 03:21:55,519 DEBUG [icon_forecast] Prefetch request dataset=icon-ch2-eps-control type=control var=vmax_10m init=2026022618 lead=15 queued=True
+2026-02-27 03:21:55,748 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v6_icon-ch2-eps-control_control_vmax_10m_u2_opavg3h_2026022618_015.npz bytes=316324
+2026-02-27 03:21:56,079 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v6_icon-ch1-eps-control_p90_vmax_10m_u2_2026022700_001.npz bytes=644031
+2026-02-27 03:21:56,396 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch2-eps-control', 'control', 'vmax_10m', 'avg_3h', '2026022618', 18)
+2026-02-27 03:21:56,401 DEBUG [icon_forecast] Prefetch request dataset=icon-ch2-eps-control type=control var=vmax_10m init=2026022618 lead=18 queued=True
+2026-02-27 03:21:56,614 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v6_icon-ch2-eps-control_control_vmax_10m_u2_opavg3h_2026022618_018.npz bytes=314107
+2026-02-27 03:21:57,279 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch2-eps-control', 'control', 'vmax_10m', 'avg_3h', '2026022618', 21)
+2026-02-27 03:21:57,279 DEBUG [icon_forecast] Prefetch request dataset=icon-ch2-eps-control type=control var=vmax_10m init=2026022618 lead=21 queued=True
+2026-02-27 03:21:57,481 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v6_icon-ch2-eps-control_control_vmax_10m_u2_opavg3h_2026022618_021.npz bytes=312689
+2026-02-27 03:21:58,197 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch2-eps-control', 'control', 'vmax_10m', 'avg_3h', '2026022618', 24)
+2026-02-27 03:21:58,203 DEBUG [icon_forecast] Prefetch request dataset=icon-ch2-eps-control type=control var=vmax_10m init=2026022618 lead=24 queued=True
+2026-02-27 03:21:58,407 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v6_icon-ch2-eps-control_control_vmax_10m_u2_opavg3h_2026022618_024.npz bytes=314507
+2026-02-27 03:21:59,099 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch2-eps-control', 'control', 'vmax_10m', 'avg_3h', '2026022618', 27)
+2026-02-27 03:21:59,102 DEBUG [icon_forecast] Prefetch request dataset=icon-ch2-eps-control type=control var=vmax_10m init=2026022618 lead=27 queued=True
+2026-02-27 03:21:59,343 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v6_icon-ch2-eps-control_control_vmax_10m_u2_opavg3h_2026022618_027.npz bytes=316200
+2026-02-27 03:22:00,014 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch2-eps-control', 'control', 'vmax_10m', 'avg_3h', '2026022618', 30)
+2026-02-27 03:22:00,014 DEBUG [icon_forecast] Prefetch request dataset=icon-ch2-eps-control type=control var=vmax_10m init=2026022618 lead=30 queued=True
+2026-02-27 03:22:00,326 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v6_icon-ch2-eps-control_control_vmax_10m_u2_opavg3h_2026022618_030.npz bytes=316781
+2026-02-27 03:22:00,931 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch2-eps-control', 'control', 'vmax_10m', 'avg_3h', '2026022618', 33)
+2026-02-27 03:22:00,931 DEBUG [icon_forecast] Prefetch request dataset=icon-ch2-eps-control type=control var=vmax_10m init=2026022618 lead=33 queued=True
+2026-02-27 03:22:01,089 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v6_icon-ch2-eps-control_control_vmax_10m_u2_opavg3h_2026022618_033.npz bytes=317671
+2026-02-27 03:22:01,837 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch2-eps-control', 'control', 'vmax_10m', 'avg_3h', '2026022618', 36)
+2026-02-27 03:22:01,862 DEBUG [icon_forecast] Prefetch request dataset=icon-ch2-eps-control type=control var=vmax_10m init=2026022618 lead=36 queued=True
+2026-02-27 03:22:02,074 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v6_icon-ch2-eps-control_control_vmax_10m_u2_opavg3h_2026022618_036.npz bytes=317715
+2026-02-27 03:22:02,708 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch2-eps-control', 'control', 'vmax_10m', 'avg_3h', '2026022618', 39)
+2026-02-27 03:22:02,711 DEBUG [icon_forecast] Prefetch request dataset=icon-ch2-eps-control type=control var=vmax_10m init=2026022618 lead=39 queued=True
+2026-02-27 03:22:02,836 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v6_icon-ch2-eps-control_control_vmax_10m_u2_opavg3h_2026022618_039.npz bytes=316606
+2026-02-27 03:22:03,133 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-27 03:22:03,607 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch2-eps-control', 'control', 'vmax_10m', 'avg_3h', '2026022618', 42)
+2026-02-27 03:22:03,617 DEBUG [icon_forecast] Prefetch request dataset=icon-ch2-eps-control type=control var=vmax_10m init=2026022618 lead=42 queued=True
+2026-02-27 03:22:03,842 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v6_icon-ch2-eps-control_control_vmax_10m_u2_opavg3h_2026022618_042.npz bytes=314912
+2026-02-27 03:22:04,527 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch2-eps-control', 'control', 'vmax_10m', 'avg_3h', '2026022618', 45)
+2026-02-27 03:22:04,533 DEBUG [icon_forecast] Prefetch request dataset=icon-ch2-eps-control type=control var=vmax_10m init=2026022618 lead=45 queued=True
+2026-02-27 03:22:04,720 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v6_icon-ch2-eps-control_control_vmax_10m_u2_opavg3h_2026022618_045.npz bytes=313619
+2026-02-27 03:22:05,429 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch2-eps-control', 'control', 'vmax_10m', 'avg_3h', '2026022618', 48)
+2026-02-27 03:22:05,444 DEBUG [icon_forecast] Prefetch request dataset=icon-ch2-eps-control type=control var=vmax_10m init=2026022618 lead=48 queued=True
+2026-02-27 03:22:05,584 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v6_icon-ch2-eps-control_control_vmax_10m_u2_opavg3h_2026022618_048.npz bytes=314487
+2026-02-27 03:22:06,317 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch2-eps-control', 'control', 'vmax_10m', 'avg_3h', '2026022618', 51)
+2026-02-27 03:22:06,318 DEBUG [icon_forecast] Prefetch request dataset=icon-ch2-eps-control type=control var=vmax_10m init=2026022618 lead=51 queued=True
+2026-02-27 03:22:06,508 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v6_icon-ch2-eps-control_control_vmax_10m_u2_opavg3h_2026022618_051.npz bytes=316642
+2026-02-27 03:22:07,205 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch2-eps-control', 'control', 'vmax_10m', 'avg_3h', '2026022618', 54)
+2026-02-27 03:22:07,214 DEBUG [icon_forecast] Prefetch request dataset=icon-ch2-eps-control type=control var=vmax_10m init=2026022618 lead=54 queued=True
+2026-02-27 03:22:07,399 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v6_icon-ch2-eps-control_control_vmax_10m_u2_opavg3h_2026022618_054.npz bytes=316618
+2026-02-27 03:22:08,122 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch2-eps-control', 'control', 'vmax_10m', 'avg_3h', '2026022618', 57)
+2026-02-27 03:22:08,130 DEBUG [icon_forecast] Prefetch request dataset=icon-ch2-eps-control type=control var=vmax_10m init=2026022618 lead=57 queued=True
+2026-02-27 03:22:08,338 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v6_icon-ch2-eps-control_control_vmax_10m_u2_opavg3h_2026022618_057.npz bytes=316539
+2026-02-27 03:22:09,016 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch2-eps-control', 'control', 'vmax_10m', 'avg_3h', '2026022618', 60)
+2026-02-27 03:22:09,018 DEBUG [icon_forecast] Prefetch request dataset=icon-ch2-eps-control type=control var=vmax_10m init=2026022618 lead=60 queued=True
+2026-02-27 03:22:09,239 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v6_icon-ch2-eps-control_control_vmax_10m_u2_opavg3h_2026022618_060.npz bytes=316366
+2026-02-27 03:22:09,929 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch2-eps-control', 'control', 'vmax_10m', 'avg_3h', '2026022618', 63)
+2026-02-27 03:22:09,932 DEBUG [icon_forecast] Prefetch request dataset=icon-ch2-eps-control type=control var=vmax_10m init=2026022618 lead=63 queued=True
+2026-02-27 03:22:10,063 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v6_icon-ch2-eps-control_control_vmax_10m_u2_opavg3h_2026022618_063.npz bytes=314972
+2026-02-27 03:22:10,831 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch2-eps-control', 'control', 'vmax_10m', 'avg_3h', '2026022618', 66)
+2026-02-27 03:22:10,841 DEBUG [icon_forecast] Prefetch request dataset=icon-ch2-eps-control type=control var=vmax_10m init=2026022618 lead=66 queued=True
+2026-02-27 03:22:10,999 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v6_icon-ch2-eps-control_control_vmax_10m_u2_opavg3h_2026022618_066.npz bytes=311947
+2026-02-27 03:22:11,706 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch2-eps-control', 'control', 'vmax_10m', 'avg_3h', '2026022618', 69)
+2026-02-27 03:22:11,711 DEBUG [icon_forecast] Prefetch request dataset=icon-ch2-eps-control type=control var=vmax_10m init=2026022618 lead=69 queued=True
+2026-02-27 03:22:11,945 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v6_icon-ch2-eps-control_control_vmax_10m_u2_opavg3h_2026022618_069.npz bytes=311556
+2026-02-27 03:22:12,643 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch2-eps-control', 'control', 'vmax_10m', 'avg_3h', '2026022618', 72)
+2026-02-27 03:22:12,666 DEBUG [icon_forecast] Prefetch request dataset=icon-ch2-eps-control type=control var=vmax_10m init=2026022618 lead=72 queued=True
+2026-02-27 03:22:12,784 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v6_icon-ch2-eps-control_control_vmax_10m_u2_opavg3h_2026022618_072.npz bytes=312640
+2026-02-27 03:22:13,519 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch2-eps-control', 'control', 'vmax_10m', 'avg_3h', '2026022618', 75)
+2026-02-27 03:22:13,522 DEBUG [icon_forecast] Prefetch request dataset=icon-ch2-eps-control type=control var=vmax_10m init=2026022618 lead=75 queued=True
+2026-02-27 03:22:13,799 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v6_icon-ch2-eps-control_control_vmax_10m_u2_opavg3h_2026022618_075.npz bytes=315873
+2026-02-27 03:22:14,427 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch2-eps-control', 'control', 'vmax_10m', 'avg_3h', '2026022618', 78)
+2026-02-27 03:22:14,457 DEBUG [icon_forecast] Prefetch request dataset=icon-ch2-eps-control type=control var=vmax_10m init=2026022618 lead=78 queued=True
+2026-02-27 03:22:14,602 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v6_icon-ch2-eps-control_control_vmax_10m_u2_opavg3h_2026022618_078.npz bytes=314262
+2026-02-27 03:22:15,333 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch2-eps-control', 'control', 'vmax_10m', 'avg_3h', '2026022618', 81)
+2026-02-27 03:22:15,348 DEBUG [icon_forecast] Prefetch request dataset=icon-ch2-eps-control type=control var=vmax_10m init=2026022618 lead=81 queued=True
+2026-02-27 03:22:15,579 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v6_icon-ch2-eps-control_control_vmax_10m_u2_opavg3h_2026022618_081.npz bytes=314147
+2026-02-27 03:22:16,210 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch2-eps-control', 'control', 'vmax_10m', 'avg_3h', '2026022618', 84)
+2026-02-27 03:22:16,222 DEBUG [icon_forecast] Prefetch request dataset=icon-ch2-eps-control type=control var=vmax_10m init=2026022618 lead=84 queued=True
+2026-02-27 03:22:16,494 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v6_icon-ch2-eps-control_control_vmax_10m_u2_opavg3h_2026022618_084.npz bytes=313933
+2026-02-27 03:22:17,124 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch2-eps-control', 'control', 'vmax_10m', 'avg_3h', '2026022618', 87)
+2026-02-27 03:22:17,132 DEBUG [icon_forecast] Prefetch request dataset=icon-ch2-eps-control type=control var=vmax_10m init=2026022618 lead=87 queued=True
+2026-02-27 03:22:17,320 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v6_icon-ch2-eps-control_control_vmax_10m_u2_opavg3h_2026022618_087.npz bytes=313647
+2026-02-27 03:22:18,026 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch2-eps-control', 'control', 'vmax_10m', 'avg_3h', '2026022618', 90)
+2026-02-27 03:22:18,031 DEBUG [icon_forecast] Prefetch request dataset=icon-ch2-eps-control type=control var=vmax_10m init=2026022618 lead=90 queued=True
+2026-02-27 03:22:18,266 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v6_icon-ch2-eps-control_control_vmax_10m_u2_opavg3h_2026022618_090.npz bytes=311135
+2026-02-27 03:22:18,919 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch2-eps-control', 'control', 'vmax_10m', 'avg_3h', '2026022618', 93)
+2026-02-27 03:22:18,931 DEBUG [icon_forecast] Prefetch request dataset=icon-ch2-eps-control type=control var=vmax_10m init=2026022618 lead=93 queued=True
+2026-02-27 03:22:19,059 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v6_icon-ch2-eps-control_control_vmax_10m_u2_opavg3h_2026022618_093.npz bytes=309925
+2026-02-27 03:22:19,815 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch2-eps-control', 'control', 'vmax_10m', 'avg_3h', '2026022618', 96)
+2026-02-27 03:22:19,839 DEBUG [icon_forecast] Prefetch request dataset=icon-ch2-eps-control type=control var=vmax_10m init=2026022618 lead=96 queued=True
+2026-02-27 03:22:20,051 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v6_icon-ch2-eps-control_control_vmax_10m_u2_opavg3h_2026022618_096.npz bytes=311544
+2026-02-27 03:22:20,759 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch2-eps-control', 'control', 'vmax_10m', 'avg_3h', '2026022618', 99)
+2026-02-27 03:22:20,771 DEBUG [icon_forecast] Prefetch request dataset=icon-ch2-eps-control type=control var=vmax_10m init=2026022618 lead=99 queued=True
+2026-02-27 03:22:21,031 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v6_icon-ch2-eps-control_control_vmax_10m_u2_opavg3h_2026022618_099.npz bytes=313585
+2026-02-27 03:22:21,622 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch2-eps-control', 'control', 'vmax_10m', 'avg_3h', '2026022618', 102)
+2026-02-27 03:22:21,625 DEBUG [icon_forecast] Prefetch request dataset=icon-ch2-eps-control type=control var=vmax_10m init=2026022618 lead=102 queued=True
+2026-02-27 03:22:21,787 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v6_icon-ch2-eps-control_control_vmax_10m_u2_opavg3h_2026022618_102.npz bytes=313991
+2026-02-27 03:22:22,515 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch2-eps-control', 'control', 'vmax_10m', 'avg_3h', '2026022618', 105)
+2026-02-27 03:22:22,522 DEBUG [icon_forecast] Prefetch request dataset=icon-ch2-eps-control type=control var=vmax_10m init=2026022618 lead=105 queued=True
+2026-02-27 03:22:22,751 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v6_icon-ch2-eps-control_control_vmax_10m_u2_opavg3h_2026022618_105.npz bytes=313969
+2026-02-27 03:22:23,187 DEBUG [icon_forecast] Metadata served datasets=2
+2026-02-27 03:22:23,444 DEBUG [icon_forecast.weather_data] Queued field fetch key=('icon-ch2-eps-control', 'control', 'vmax_10m', 'avg_3h', '2026022618', 108)
+2026-02-27 03:22:23,461 DEBUG [icon_forecast] Prefetch request dataset=icon-ch2-eps-control type=control var=vmax_10m init=2026022618 lead=108 queued=True
+2026-02-27 03:22:23,670 DEBUG [icon_forecast.weather_data] Saved field cache path=cache/fields/v6_icon-ch2-eps-control_control_vmax_10m_u2_opavg3h_2026022618_108.npz bytes=313700
+2026-02-27 03:22:35,704 INFO [icon_forecast] Logger configured level=INFO file=logs/icon_forecast.log
+2026-02-27 03:22:35,749 INFO [icon_forecast] App startup
+2026-02-27 03:22:35,750 INFO [icon_forecast.weather_data] Started hot prewarm thread
+2026-02-27 03:22:36,309 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch2-eps-control type=control var=vmax_10m init=2026022618 lead=111 z=8 x=132 y=89
+2026-02-27 03:22:36,309 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch2-eps-control type=control var=vmax_10m init=2026022618 lead=111 z=8 x=134 y=91
+2026-02-27 03:22:36,313 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch2-eps-control type=control var=vmax_10m init=2026022618 lead=111 z=8 x=135 y=90
+2026-02-27 03:22:36,338 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch2-eps-control type=control var=vmax_10m init=2026022618 lead=111 z=8 x=135 y=89
+2026-02-27 03:22:36,362 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch2-eps-control type=control var=vmax_10m init=2026022618 lead=117 z=8 x=133 y=91
+2026-02-27 03:22:36,363 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch2-eps-control type=control var=vmax_10m init=2026022618 lead=117 z=8 x=132 y=90
+2026-02-27 03:23:07,821 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch2-eps-control type=mean var=vmax_10m init=2026022618 lead=20 z=8 x=133 y=90
+2026-02-27 03:23:07,821 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch2-eps-control type=mean var=vmax_10m init=2026022618 lead=20 z=8 x=134 y=90
+2026-02-27 03:23:07,822 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch2-eps-control type=mean var=vmax_10m init=2026022618 lead=20 z=8 x=133 y=89
+2026-02-27 03:23:07,823 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch2-eps-control type=mean var=vmax_10m init=2026022618 lead=20 z=8 x=134 y=89
+2026-02-27 03:23:07,823 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch2-eps-control type=mean var=vmax_10m init=2026022618 lead=20 z=8 x=133 y=91
+2026-02-27 03:23:07,823 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch2-eps-control type=mean var=vmax_10m init=2026022618 lead=20 z=8 x=132 y=90
+2026-02-27 03:25:23,523 INFO [icon_forecast] App shutdown
+2026-02-27 03:25:23,524 INFO [icon_forecast.weather_data] Stopped background workers
+2026-02-27 03:25:31,218 INFO [icon_forecast] Logger configured level=INFO file=logs/icon_forecast.log
+2026-02-27 03:25:31,248 INFO [icon_forecast] App startup
+2026-02-27 03:25:31,249 INFO [icon_forecast.weather_data] Started hot prewarm thread
+2026-02-27 03:25:43,580 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=mean var=vmax_10m init=2026022700 lead=0 z=8 x=133 y=90
+2026-02-27 03:25:43,580 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=mean var=vmax_10m init=2026022700 lead=0 z=8 x=133 y=89
+2026-02-27 03:25:43,580 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=mean var=vmax_10m init=2026022700 lead=0 z=8 x=134 y=90
+2026-02-27 03:25:43,585 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=mean var=vmax_10m init=2026022700 lead=0 z=8 x=134 y=89
+2026-02-27 03:25:43,588 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=mean var=vmax_10m init=2026022700 lead=0 z=8 x=132 y=90
+2026-02-27 03:25:43,589 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=mean var=vmax_10m init=2026022700 lead=0 z=8 x=133 y=91
+2026-02-27 03:25:46,182 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=mean var=vmax_10m init=2026022700 lead=0 z=9 x=267 y=180
+2026-02-27 03:25:46,188 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=mean var=vmax_10m init=2026022700 lead=0 z=9 x=268 y=180
+2026-02-27 03:25:46,191 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=mean var=vmax_10m init=2026022700 lead=0 z=9 x=267 y=179
+2026-02-27 03:25:46,193 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=mean var=vmax_10m init=2026022700 lead=0 z=9 x=267 y=181
+2026-02-27 03:25:46,448 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=mean var=vmax_10m init=2026022700 lead=0 z=9 x=266 y=180
+2026-02-27 03:25:46,449 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=mean var=vmax_10m init=2026022700 lead=0 z=9 x=268 y=179
+2026-02-27 03:25:55,802 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=mean var=vmax_10m init=2026022700 lead=24 z=9 x=266 y=180
+2026-02-27 03:25:55,804 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=mean var=vmax_10m init=2026022700 lead=24 z=9 x=267 y=180
+2026-02-27 03:25:55,804 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=mean var=vmax_10m init=2026022700 lead=24 z=9 x=266 y=179
+2026-02-27 03:25:55,804 INFO [icon_forecast] Tile cache miss; sync-fetch dataset=icon-ch1-eps-control type=mean var=vmax_10m init=2026022700 lead=24 z=9 x=267 y=179
