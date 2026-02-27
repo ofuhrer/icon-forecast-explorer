@@ -1302,7 +1302,7 @@ function renderMapSummary() {
     ? `${variableName} (${gribName}, ${unitText})`
     : `${variableName} (${gribName})`;
   els.mapSummaryLine2.textContent = `${modelText} ${forecastText} +${displayLead}h`;
-  els.mapSummaryLine3.textContent = `Local time: ${validText}`;
+  els.mapSummaryLine3.textContent = `Valid time: ${validText}`;
   els.mapSummaryLine4.textContent = `${statisticText}, ${timeOperatorText}`;
 }
 
