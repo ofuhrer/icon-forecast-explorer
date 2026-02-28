@@ -22,6 +22,7 @@ export function renderMeteogram({
   canvas,
   pointEl,
   pinnedPoint,
+  pointText = "",
   seriesData,
   lead,
   leadLabelOffsetHours = 0,
@@ -44,7 +45,7 @@ export function renderMeteogram({
     return;
   }
 
-  const basePointText = `${pinnedPoint.lat.toFixed(3)}, ${pinnedPoint.lon.toFixed(3)}`;
+  const basePointText = pointText || `${pinnedPoint.lat.toFixed(3)}, ${pinnedPoint.lon.toFixed(3)}`;
   if (pointEl) {
     pointEl.textContent = basePointText;
   }

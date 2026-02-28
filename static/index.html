@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>ICON Forecast Explorer</title>
     <link href="https://unpkg.com/maplibre-gl@5.3.1/dist/maplibre-gl.css" rel="stylesheet" />
-    <link rel="stylesheet" href="/styles.css?v=20260227c" />
+    <link rel="stylesheet" href="/styles.css?v=20260227g" />
   </head>
   <body>
     <div id="app">
@@ -47,7 +47,18 @@
           </select>
         </div>
         <details id="meteogramBlock" class="collapsible">
-          <summary class="metaLabel">Meteogram (click map)</summary>
+          <summary class="metaLabel">
+            <span>Meteogram (click map)</span>
+            <button
+              id="openFullMeteogramBtn"
+              class="meteogramPopupBtn"
+              type="button"
+              title="Open full meteogram"
+              aria-label="Open full meteogram"
+            >
+              ↗
+            </button>
+          </summary>
           <div id="meteogramPoint">-</div>
           <canvas id="meteogramCanvas" width="280" height="140"></canvas>
         </details>
@@ -55,6 +66,29 @@
         <div id="fieldDebugInfo"></div>
       </aside>
       <main id="map">
+        <button id="sidebarToggleBtn" class="mapControlBox" type="button" aria-label="Show or hide sidebar">
+          <span class="sidebarGlyph"></span>
+        </button>
+        <div id="mapSearchWrap">
+          <form id="mapSearchForm" class="mapControlBox" autocomplete="off">
+            <button id="mapSearchBtn" type="submit" aria-label="Search place">⌕</button>
+            <input id="mapSearchInput" type="text" placeholder="Location, coordinates, ..." aria-label="Search place" />
+          </form>
+          <div id="mapSearchSuggestions" hidden></div>
+        </div>
+        <div id="mapRightControls" aria-label="Map controls">
+          <button id="geoLocateBtn" class="mapControlBox" type="button" aria-label="Current location">➤</button>
+          <div id="zoomControlBox" class="mapControlBox">
+            <button id="zoomInBtn" type="button" aria-label="Zoom in">+</button>
+            <button id="zoomOutBtn" type="button" aria-label="Zoom out">−</button>
+          </div>
+        </div>
+        <div id="layerControlWrap" class="mapControlBox">
+          <button id="layerToggleBtn" type="button" aria-label="Toggle layers"><span class="layersGlyph"></span></button>
+          <div id="layerPanel" hidden>
+            <label><input id="layerBasemap" type="checkbox" checked /> Basemap</label>
+          </div>
+        </div>
         <div id="mapSummaryOverlay" aria-live="polite">
           <div id="mapSummaryLine1">-</div>
           <div id="mapSummaryLine2">-</div>
@@ -68,10 +102,25 @@
         <div id="mapStatusOverlay" aria-live="polite">
           <div id="tileFetchStatus"></div>
         </div>
+        <div id="meteogramFlowOverlay" hidden aria-live="polite">
+          <div id="meteogramFlowCard" class="mapControlBox">
+            <div id="meteogramFlowTitle">Meteogram readiness</div>
+            <div id="meteogramFlowMessage">Checking cached data...</div>
+            <div id="meteogramFlowProgressTrack" aria-hidden="true">
+              <div id="meteogramFlowProgressFill"></div>
+            </div>
+            <div id="meteogramFlowProgressLabel">0%</div>
+            <div id="meteogramFlowActions">
+              <button id="meteogramFlowDownloadBtn" type="button">Download missing data</button>
+              <button id="meteogramFlowOpenBtn" type="button">Open meteogram</button>
+              <button id="meteogramFlowCloseBtn" type="button">Close</button>
+            </div>
+          </div>
+        </div>
       </main>
     </div>
 
     <script src="https://unpkg.com/maplibre-gl@5.3.1/dist/maplibre-gl.js"></script>
-    <script src="/main.js?v=20260227e" type="module"></script>
+    <script src="/main.js?v=20260227h" type="module"></script>
   </body>
 </html>

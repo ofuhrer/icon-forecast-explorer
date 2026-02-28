@@ -19,11 +19,11 @@ from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
 
-from weather_data import ForecastStore, SUPPORTED_TIME_OPERATORS, TIME_OPERATORS
+from weather_data import ForecastStore, SUPPORTED_TIME_OPERATORS, TIME_OPERATORS, SWISS_BOUNDS
 
 TILE_SIZE = 256
 COLORMAP_MANIFEST_PATH = Path(__file__).resolve().parent / "colormaps.json"
-SERIES_CACHE_TTL_SECONDS = float(os.getenv("SERIES_CACHE_TTL_SECONDS", "120"))
+SERIES_CACHE_TTL_SECONDS = float(os.getenv("SERIES_CACHE_TTL_SECONDS", "1200"))
 SERIES_CACHE_MAX_ENTRIES = int(os.getenv("SERIES_CACHE_MAX_ENTRIES", "512"))
 SERIES_LATLON_BUCKET_DEG = float(os.getenv("SERIES_LATLON_BUCKET_DEG", "0.01"))
 
@@ -94,6 +94,7 @@ FORECAST_TYPES = [
     {"type_id": "p90", "display_name": "90% Percentile"},
 ]
 FORECAST_TYPE_IDS = {item["type_id"] for item in FORECAST_TYPES}
+SERIES_FORECAST_TYPE_IDS = FORECAST_TYPE_IDS | {"min", "max"}
 _SERIES_CACHE: Dict[tuple, tuple[float, Dict[str, object]]] = {}
 _SERIES_CACHE_GUARD = threading.Lock()
 _SERIES_KEY_LOCKS: Dict[tuple, threading.Lock] = {}
@@ -101,6 +102,10 @@ _SERIES_KEY_LOCKS_GUARD = threading.Lock()
 
 
 def _validate_time_operator(value: str) -> str:
+    if not isinstance(value, str):
+        default = getattr(value, "default", None)
+        if isinstance(default, str):
+            value = default
     time_operator = str(value or "none").strip() or "none"
     if time_operator not in SUPPORTED_TIME_OPERATORS:
         raise HTTPException(status_code=400, detail=f"Unknown time_operator: {time_operator}")
@@ -111,10 +116,30 @@ def _parse_requested_types(types: str) -> List[str]:
     req_types = [t.strip() for t in str(types).split(",") if t.strip()]
     if not req_types:
         req_types = ["control"]
-    unknown_types = [t for t in req_types if t not in FORECAST_TYPE_IDS]
+    unknown_types = [t for t in req_types if t not in SERIES_FORECAST_TYPE_IDS]
     if unknown_types:
         raise HTTPException(status_code=400, detail=f"Unknown type_id values: {', '.join(unknown_types)}")
     return req_types
+
+
+def _parse_requested_variables(variables: str) -> List[str]:
+    req_variables = [v.strip() for v in str(variables).split(",") if v.strip()]
+    if not req_variables:
+        raise HTTPException(status_code=400, detail="No variables requested")
+    known_variables = {meta.variable_id for meta in getattr(store, "variable_metas", [])}
+    if known_variables:
+        unknown_variables = [v for v in req_variables if v not in known_variables]
+        if unknown_variables:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown variable_id values: {', '.join(unknown_variables)}",
+            )
+    # preserve request order while removing duplicates
+    out: List[str] = []
+    for variable_id in req_variables:
+        if variable_id not in out:
+            out.append(variable_id)
+    return out
 
 
 @app.on_event("startup")
@@ -143,14 +168,23 @@ def metadata() -> Dict[str, object]:
         default_leads = store.lead_hours_for_init(ds.dataset_id, init_times[0]) if init_times else []
         variables = []
         for var in store.variable_metas:
-            grib_name = store.variable_grib_name(var.variable_id)
+            grib_name_fn = getattr(store, "variable_grib_name", None)
+            long_name_fn = getattr(store, "variable_long_name", None)
+            standard_unit_fn = getattr(store, "variable_standard_unit", None)
+            grib_name = (
+                grib_name_fn(var.variable_id)
+                if callable(grib_name_fn)
+                else str(var.ogd_variable or var.variable_id).upper()
+            )
+            long_name = long_name_fn(var.variable_id) if callable(long_name_fn) else var.display_name
+            standard_unit = standard_unit_fn(var.variable_id) if callable(standard_unit_fn) else var.unit
             variables.append(
                 {
                     "variable_id": var.variable_id,
                     "display_name": var.display_name,
-                    "long_name": store.variable_long_name(var.variable_id),
+                    "long_name": long_name,
                     "grib_name": grib_name,
-                    "standard_unit": store.variable_standard_unit(var.variable_id),
+                    "standard_unit": standard_unit,
                     "display_unit": var.unit,
                     "unit": var.unit,
                     "range": [var.min_value, var.max_value],
@@ -163,6 +197,8 @@ def metadata() -> Dict[str, object]:
             {
                 "dataset_id": ds.dataset_id,
                 "display_name": ds.display_name,
+                "target_grid_width": int(ds.target_grid_width),
+                "target_grid_height": int(ds.target_grid_height),
                 "types": FORECAST_TYPES,
                 "time_operators": TIME_OPERATORS,
                 "refresh": store.refresh_status(ds.dataset_id),
@@ -176,13 +212,14 @@ def metadata() -> Dict[str, object]:
 
     first = datasets_payload[0] if datasets_payload else {"init_times": [], "lead_hours": [], "init_to_leads": {}}
     LOGGER.debug("Metadata served datasets=%d", len(datasets_payload))
+    bounds = _effective_grid_bounds()
     return {
         "datasets": datasets_payload,
         "time_operators": TIME_OPERATORS,
         "init_times": first["init_times"],
         "lead_hours": first["lead_hours"],
         "init_to_leads": first["init_to_leads"],
-        "bounds": store.grid_bounds(),
+        "bounds": bounds,
     }
 
 
@@ -243,6 +280,31 @@ def value(
     }
 
 
+@app.get("/api/model-elevation")
+def model_elevation(
+    dataset_id: str = Query(...),
+    lat: float = Query(..., ge=-90, le=90),
+    lon: float = Query(..., ge=-180, le=180),
+) -> Dict[str, object]:
+    try:
+        elevation_m = store.get_model_elevation(dataset_id, lat=lat, lon=lon)
+    except ValueError as exc:
+        LOGGER.warning("Model elevation request invalid: %s", exc)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        LOGGER.debug("Model elevation request runtime error: %s", exc)
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        LOGGER.warning("Model elevation request unexpected error: %s", exc)
+        raise HTTPException(status_code=503, detail="Model elevation unavailable") from exc
+    return {
+        "dataset_id": dataset_id,
+        "lat": lat,
+        "lon": lon,
+        "model_elevation_m": round(float(elevation_m), 2),
+    }
+
+
 @app.get("/api/prefetch")
 def prefetch(
     dataset_id: str = Query(...),
@@ -273,6 +335,45 @@ def prefetch(
         LOGGER.warning("Prefetch request runtime error: %s", exc)
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return {"ok": True, "queued": bool(queued)}
+
+
+@app.get("/api/meteogram-warmup/start")
+def meteogram_warmup_start(
+    dataset_id: str = Query(...),
+    init: str = Query(...),
+    variables: str = Query("clct,tot_prec,vmax_10m,t_2m"),
+    types: str = Query("control,median,p10,p90,min,max"),
+    time_operator: str = Query("none"),
+) -> Dict[str, object]:
+    try:
+        req_variables = _parse_requested_variables(variables)
+        req_types = _parse_requested_types(types)
+        time_operator = _validate_time_operator(time_operator)
+        payload = store.start_meteogram_warmup(
+            dataset_id=dataset_id,
+            init_str=init,
+            variable_ids=req_variables,
+            type_ids=req_types,
+            time_operator=time_operator,
+        )
+        return payload
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.get("/api/meteogram-warmup/status")
+def meteogram_warmup_status(job_id: str = Query(...)) -> Dict[str, object]:
+    try:
+        payload = store.get_meteogram_warmup(job_id)
+        return payload
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Unknown warmup job_id: {job_id}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.get("/api/field-debug")
@@ -452,7 +553,7 @@ def tiles(
         )
         raise
 
-    rgba = render_tile_rgba(field, z, x, y, variable_id, store.grid_bounds())
+    rgba = render_tile_rgba(field, z, x, y, variable_id, _effective_grid_bounds())
     image = Image.fromarray(rgba, mode="RGBA")
     buf = BytesIO()
     image.save(buf, format="PNG", optimize=True)
@@ -497,11 +598,12 @@ def wind_vectors(
 
     z = float(zoom)
     base_stride = int(max(6, min(18, round(18 - z))))
-    bounds = store.grid_bounds()
-    y0 = _lat_to_y(max_lat, store._grid_height, bounds)
-    y1 = _lat_to_y(min_lat, store._grid_height, bounds)
-    x0 = _lon_to_x(min_lon, store._grid_width, bounds)
-    x1 = _lon_to_x(max_lon, store._grid_width, bounds)
+    bounds = _effective_grid_bounds()
+    grid_height, grid_width = int(u_field.shape[0]), int(u_field.shape[1])
+    y0 = _lat_to_y(max_lat, grid_height, bounds)
+    y1 = _lat_to_y(min_lat, grid_height, bounds)
+    x0 = _lon_to_x(min_lon, grid_width, bounds)
+    x1 = _lon_to_x(max_lon, grid_width, bounds)
     y_start, y_end = sorted((y0, y1))
     x_start, x_end = sorted((x0, x1))
     ny = max(1, y_end - y_start + 1)
@@ -520,8 +622,8 @@ def wind_vectors(
                 speed = math.sqrt(u * u + v * v)
                 if not np.isfinite(speed):
                     continue
-                lat = _y_to_lat(yy, store._grid_height, bounds)
-                lon = _x_to_lon(xx, store._grid_width, bounds)
+                lat = _y_to_lat(yy, grid_height, bounds)
+                lon = _x_to_lon(xx, grid_width, bounds)
                 sampled.append({"lat": lat, "lon": lon, "u": u, "v": v, "speed": speed})
         return sampled
 
@@ -681,8 +783,55 @@ def _load_project_colormaps(path: Path) -> tuple[Dict[str, Dict[str, object]], D
 COLORMAP_REGISTRY, VARIABLE_TO_COLORMAP = _load_project_colormaps(COLORMAP_MANIFEST_PATH)
 
 
-def _bucket_coord(value: float) -> float:
-    return round(value / SERIES_LATLON_BUCKET_DEG) * SERIES_LATLON_BUCKET_DEG
+def _coord_key(value: float) -> float:
+    return round(float(value), 6)
+
+
+def _dataset_grid_shape(dataset_id: str) -> tuple[int, int] | None:
+    metas = getattr(store, "dataset_metas", None)
+    if not metas:
+        return None
+    for ds in metas:
+        if getattr(ds, "dataset_id", None) == dataset_id:
+            w = int(getattr(ds, "target_grid_width", 0) or 0)
+            h = int(getattr(ds, "target_grid_height", 0) or 0)
+            if w > 1 and h > 1:
+                return (w, h)
+    return None
+
+
+def _effective_grid_bounds() -> Dict[str, float]:
+    grid_bounds_fn = getattr(store, "grid_bounds", None)
+    if callable(grid_bounds_fn):
+        try:
+            bounds = grid_bounds_fn()
+            if isinstance(bounds, dict):
+                return bounds
+        except Exception:
+            pass
+    return dict(SWISS_BOUNDS)
+
+
+def _series_spatial_cache_token(dataset_id: str, lat: float, lon: float) -> tuple:
+    # Cache by sampled grid point to preserve value correctness while still
+    # allowing reuse across nearby request coordinates that map to the same cell.
+    bounds = _effective_grid_bounds()
+    shape = _dataset_grid_shape(dataset_id)
+    if shape is None:
+        return ("coord", _coord_key(lat), _coord_key(lon))
+    try:
+        min_lon = float(bounds["min_lon"])
+        max_lon = float(bounds["max_lon"])
+        min_lat = float(bounds["min_lat"])
+        max_lat = float(bounds["max_lat"])
+    except (TypeError, ValueError, KeyError):
+        return ("coord", _coord_key(lat), _coord_key(lon))
+    lon_span = max(1e-9, max_lon - min_lon)
+    lat_span = max(1e-9, max_lat - min_lat)
+    w, h = shape
+    x = int(np.clip(round((float(lon) - min_lon) / lon_span * (w - 1)), 0, w - 1))
+    y = int(np.clip(round((max_lat - float(lat)) / lat_span * (h - 1)), 0, h - 1))
+    return ("grid", x, y)
 
 
 def _series_cache_key(
@@ -695,14 +844,14 @@ def _series_cache_key(
     lon: float,
     time_operator: str,
 ) -> tuple:
+    spatial_token = _series_spatial_cache_token(dataset_id, lat, lon)
     return (
         dataset_id,
         variable_id,
         init,
         tuple(req_types),
         bool(cached_only),
-        _bucket_coord(lat),
-        _bucket_coord(lon),
+        spatial_token,
         str(time_operator),
     )
 

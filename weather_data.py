@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+import hashlib
 import json
 import logging
 import os
@@ -31,7 +32,13 @@ FIELD_CACHE_VERSION = "v6"
 MS_TO_KMH = 3.6
 FIELD_CACHE_RETENTION_HOURS = 30
 FIELD_CACHE_CLEANUP_INTERVAL_SECONDS = 300
-SUPPORTED_FORECAST_TYPES = {"control", "mean", "median", "p10", "p90"}
+GRIB_ASSET_CACHE_ENABLED = os.getenv("GRIB_ASSET_CACHE_ENABLED", "1").strip() == "1"
+GRIB_ASSET_CACHE_TTL_HOURS = int(os.getenv("GRIB_ASSET_CACHE_TTL_HOURS", "168"))
+GRIB_ASSET_CACHE_MAX_BYTES = int(os.getenv("GRIB_ASSET_CACHE_MAX_BYTES", str(24 * 1024 * 1024 * 1024)))
+GRIB_DOWNLOAD_WORKERS = int(os.getenv("GRIB_DOWNLOAD_WORKERS", "24"))
+METEOGRAM_WARM_WORKERS = int(os.getenv("METEOGRAM_WARM_WORKERS", "8"))
+METEOGRAM_WARM_JOB_TTL_SECONDS = int(os.getenv("METEOGRAM_WARM_JOB_TTL_SECONDS", "3600"))
+SUPPORTED_FORECAST_TYPES = {"control", "mean", "median", "p10", "p90", "min", "max"}
 TIME_OPERATORS = [
     {"time_operator": "none", "display_name": "None"},
     {"time_operator": "avg_3h", "display_name": "Avg 3h"},
@@ -55,11 +62,20 @@ SUPPORTED_TIME_OPERATORS = {item["time_operator"] for item in TIME_OPERATORS}
 HOT_PREWARM_INTERVAL_SECONDS = 300
 HOT_PREWARM_VARIABLES = tuple(
     v.strip()
-    for v in os.getenv("HOT_PREWARM_VARIABLES", "t_2m,tot_prec").split(",")
+    for v in os.getenv("HOT_PREWARM_VARIABLES", "clct,tot_prec,vmax_10m,t_2m").split(",")
     if v.strip()
 )
-HOT_PREWARM_TYPES = ("control",)
-HOT_PREWARM_LEADS = (0, 6, 12)
+HOT_PREWARM_TYPES = tuple(
+    t.strip()
+    for t in os.getenv("HOT_PREWARM_TYPES", "control,p10,p90").split(",")
+    if t.strip() in SUPPORTED_FORECAST_TYPES
+) or ("control",)
+HOT_PREWARM_LEADS = tuple(
+    int(v.strip())
+    for v in os.getenv("HOT_PREWARM_LEADS", "0,3,6,9,12,15,18,21,24,27,30,33,36,39,42,45,48").split(",")
+    if v.strip().isdigit()
+) or (0, 6, 12)
+HOT_PREWARM_ALL_LEADS = os.getenv("HOT_PREWARM_ALL_LEADS", "1").strip() == "1"
 HOT_PREWARM_ENABLED = os.getenv("HOT_PREWARM_ENABLED", "1").strip() == "1"
 OGD_FETCH_RETRIES = 3
 OGD_FETCH_BASE_BACKOFF_SECONDS = 0.4
@@ -145,6 +161,8 @@ class DatasetMeta:
     expected_members_total: int
     fallback_cycle_hours: int
     fallback_lead_hours: List[int]
+    target_grid_width: int = 540
+    target_grid_height: int = 380
 
 
 class ForecastStore:
@@ -364,6 +382,8 @@ class ForecastStore:
                 expected_members_total=11,
                 fallback_cycle_hours=3,
                 fallback_lead_hours=list(range(0, 49)),
+                target_grid_width=540,
+                target_grid_height=380,
             ),
             "icon-ch2-eps-control": DatasetMeta(
                 dataset_id="icon-ch2-eps-control",
@@ -373,6 +393,8 @@ class ForecastStore:
                 expected_members_total=21,
                 fallback_cycle_hours=6,
                 fallback_lead_hours=list(range(0, 121)),
+                target_grid_width=270,
+                target_grid_height=190,
             ),
         }
 
@@ -385,20 +407,36 @@ class ForecastStore:
         self._field_cache_dir = self._cache_dir / "fields"
         self._vector_cache_dir = self._cache_dir / "vectors"
         self._catalog_cache_dir = self._cache_dir / "catalogs"
+        self._grib_asset_cache_dir = self._cache_dir / "grib_assets"
+        self._constant_cache_dir = self._cache_dir / "constants"
         self._field_cache_dir.mkdir(parents=True, exist_ok=True)
         self._vector_cache_dir.mkdir(parents=True, exist_ok=True)
         self._catalog_cache_dir.mkdir(parents=True, exist_ok=True)
+        self._grib_asset_cache_dir.mkdir(parents=True, exist_ok=True)
+        self._constant_cache_dir.mkdir(parents=True, exist_ok=True)
 
         self._field_cache: Dict[Tuple[str, ...], np.ndarray] = {}
         self._wind_vector_cache: Dict[Tuple[str, ...], Tuple[np.ndarray, np.ndarray]] = {}
+        self._constant_fields: Dict[Tuple[str, str], np.ndarray] = {}
         self._field_debug_info: Dict[Tuple[str, ...], Dict[str, object]] = {}
         self._field_failures: Dict[Tuple[str, ...], Dict[str, object]] = {}
         self._field_failure_guard = threading.Lock()
         self._key_locks: Dict[Tuple[str, ...], threading.Lock] = {}
         self._key_locks_guard = threading.Lock()
         self._catalog_guard = threading.Lock()
+        self._constant_guard = threading.Lock()
+        self._constants_asset_guard = threading.Lock()
         self._refresh_state_guard = threading.Lock()
         self._cleanup_guard = threading.Lock()
+        self._grib_asset_cache_guard = threading.Lock()
+        self._grib_asset_key_locks: Dict[str, threading.Lock] = {}
+        self._grib_asset_key_locks_guard = threading.Lock()
+        self._grib_download_futures: Dict[str, Future] = {}
+        self._grib_download_futures_guard = threading.Lock()
+        self._grib_download_executor = ThreadPoolExecutor(
+            max_workers=max(1, GRIB_DOWNLOAD_WORKERS),
+            thread_name_prefix="grib-download",
+        )
         self._prewarm_guard = threading.Lock()
         self._display_offset_guard = threading.Lock()
         self._background_fetch_guard = threading.Lock()
@@ -407,8 +445,17 @@ class ForecastStore:
             max_workers=max(1, BACKGROUND_FETCH_WORKERS),
             thread_name_prefix="field-fetch",
         )
+        self._meteogram_warm_executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="meteogram-warm-job",
+        )
+        self._meteogram_warm_guard = threading.Lock()
+        self._meteogram_warm_jobs: Dict[str, Dict[str, object]] = {}
+        self._meteogram_warm_index: Dict[Tuple[str, ...], str] = {}
+        self._meteogram_warm_seq = 0
 
         self._catalogs: Dict[str, Dict[str, object]] = {}
+        self._constants_asset_urls: Dict[str, str] = {}
         self._catalog_refreshed_at: Dict[str, datetime] = {}
         self._refresh_inflight: set[str] = set()
         self._variable_lead_display_offsets: Dict[str, int] = {
@@ -427,6 +474,7 @@ class ForecastStore:
             self._catalogs[dataset_id] = cached if cached is not None else self._fallback_catalog(cfg)
             self._catalog_refreshed_at[dataset_id] = stale
         self._last_cleanup_at = datetime.min.replace(tzinfo=timezone.utc)
+        self._last_grib_asset_cleanup_at = datetime.min.replace(tzinfo=timezone.utc)
         self._cleanup_field_cache(force=True)
 
     def start_background_prewarm(self) -> None:
@@ -450,6 +498,8 @@ class ForecastStore:
         with self._prewarm_guard:
             self._prewarm_stop.set()
         self._background_fetch_executor.shutdown(wait=False, cancel_futures=False)
+        self._grib_download_executor.shutdown(wait=False, cancel_futures=False)
+        self._meteogram_warm_executor.shutdown(wait=False, cancel_futures=False)
         LOGGER.info("Stopped background workers")
 
     def queue_field_fetch(
@@ -507,6 +557,231 @@ class ForecastStore:
         LOGGER.debug("Queued wind vector fetch key=%s", key)
         return True
 
+    def start_meteogram_warmup(
+        self,
+        dataset_id: str,
+        init_str: str,
+        variable_ids: List[str],
+        type_ids: List[str],
+        time_operator: str = "none",
+    ) -> Dict[str, object]:
+        self._dataset_config(dataset_id)
+        if time_operator not in SUPPORTED_TIME_OPERATORS:
+            raise ValueError(f"Unknown time_operator: {time_operator}")
+        if not variable_ids:
+            raise ValueError("No variables requested for warmup")
+        if not type_ids:
+            raise ValueError("No forecast types requested for warmup")
+        norm_variables: List[str] = []
+        for variable_id in variable_ids:
+            if variable_id not in self._variables:
+                raise ValueError(f"Unknown variable_id: {variable_id}")
+            if variable_id not in norm_variables:
+                norm_variables.append(variable_id)
+        norm_types: List[str] = []
+        for type_id in type_ids:
+            if type_id not in SUPPORTED_FORECAST_TYPES:
+                raise ValueError(f"Unknown type_id: {type_id}")
+            if type_id not in norm_types:
+                norm_types.append(type_id)
+        leads = [int(v) for v in self.lead_hours_for_init(dataset_id, init_str)]
+        if not leads:
+            raise ValueError(f"No leads available for init {init_str}")
+
+        key = (
+            dataset_id,
+            init_str,
+            time_operator,
+            tuple(norm_variables),
+            tuple(norm_types),
+        )
+        with self._meteogram_warm_guard:
+            self._cleanup_meteogram_warm_jobs_locked()
+            existing_job_id = self._meteogram_warm_index.get(key)
+            if existing_job_id:
+                existing = self._meteogram_warm_jobs.get(existing_job_id)
+                if existing and str(existing.get("status", "")) in {"queued", "running", "done", "partial"}:
+                    return self._meteogram_warm_payload(existing)
+                self._meteogram_warm_index.pop(key, None)
+
+        total_tasks, ready_tasks, missing_tasks = self._compute_meteogram_warm_tasks(
+            dataset_id=dataset_id,
+            init_str=init_str,
+            variable_ids=norm_variables,
+            type_ids=norm_types,
+            leads=leads,
+            time_operator=time_operator,
+        )
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with self._meteogram_warm_guard:
+            self._meteogram_warm_seq += 1
+            job_id = f"mw-{int(time.time())}-{self._meteogram_warm_seq}"
+            job = {
+                "job_id": job_id,
+                "dataset_id": dataset_id,
+                "init": init_str,
+                "variables": list(norm_variables),
+                "types": list(norm_types),
+                "time_operator": time_operator,
+                "status": "queued",
+                "created_at": now_iso,
+                "started_at": None,
+                "finished_at": None,
+                "total_tasks": int(total_tasks),
+                "completed_tasks": int(ready_tasks),
+                "failed_tasks": 0,
+                "errors": [],
+                "key": key,
+            }
+            self._meteogram_warm_jobs[job_id] = job
+            self._meteogram_warm_index[key] = job_id
+            if not missing_tasks:
+                job["status"] = "done"
+                job["started_at"] = now_iso
+                job["finished_at"] = now_iso
+                return self._meteogram_warm_payload(job)
+            self._meteogram_warm_executor.submit(self._run_meteogram_warm_job, job_id, missing_tasks)
+            return self._meteogram_warm_payload(job)
+
+    def get_meteogram_warmup(self, job_id: str) -> Dict[str, object]:
+        with self._meteogram_warm_guard:
+            self._cleanup_meteogram_warm_jobs_locked()
+            job = self._meteogram_warm_jobs.get(str(job_id))
+            if job is None:
+                raise KeyError(str(job_id))
+            return self._meteogram_warm_payload(job)
+
+    def _compute_meteogram_warm_tasks(
+        self,
+        dataset_id: str,
+        init_str: str,
+        variable_ids: List[str],
+        type_ids: List[str],
+        leads: List[int],
+        time_operator: str,
+    ) -> Tuple[int, int, List[Tuple[str, str, str, int, str, str]]]:
+        tasks: List[Tuple[str, str, str, int, str, str]] = []
+        total = 0
+        ready = 0
+        for variable_id in variable_ids:
+            for type_id in type_ids:
+                for lead_hour in leads:
+                    total += 1
+                    cached = self.get_cached_field(
+                        dataset_id=dataset_id,
+                        variable_id=variable_id,
+                        init_str=init_str,
+                        lead_hour=int(lead_hour),
+                        type_id=type_id,
+                        time_operator=time_operator,
+                    )
+                    if cached is not None:
+                        ready += 1
+                    else:
+                        tasks.append((dataset_id, variable_id, init_str, int(lead_hour), type_id, time_operator))
+        return total, ready, tasks
+
+    def _run_meteogram_warm_job(
+        self,
+        job_id: str,
+        tasks: List[Tuple[str, str, str, int, str, str]],
+    ) -> None:
+        with self._meteogram_warm_guard:
+            job = self._meteogram_warm_jobs.get(job_id)
+            if job is None:
+                return
+            job["status"] = "running"
+            job["started_at"] = datetime.now(timezone.utc).isoformat()
+        worker_count = max(1, min(int(METEOGRAM_WARM_WORKERS), len(tasks)))
+        with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="meteogram-warm-field") as executor:
+            futures = [
+                executor.submit(
+                    self.get_field,
+                    dataset_id,
+                    variable_id,
+                    init_str,
+                    lead_hour,
+                    type_id=type_id,
+                    time_operator=time_operator,
+                )
+                for dataset_id, variable_id, init_str, lead_hour, type_id, time_operator in tasks
+            ]
+            for fut in as_completed(futures):
+                error_text: str | None = None
+                try:
+                    fut.result()
+                except Exception as exc:
+                    error_text = str(exc)
+                with self._meteogram_warm_guard:
+                    job = self._meteogram_warm_jobs.get(job_id)
+                    if job is None:
+                        return
+                    job["completed_tasks"] = int(job.get("completed_tasks", 0)) + 1
+                    if error_text:
+                        job["failed_tasks"] = int(job.get("failed_tasks", 0)) + 1
+                        errors = job.setdefault("errors", [])
+                        if isinstance(errors, list) and len(errors) < 15:
+                            errors.append(error_text)
+        with self._meteogram_warm_guard:
+            job = self._meteogram_warm_jobs.get(job_id)
+            if job is None:
+                return
+            failed = int(job.get("failed_tasks", 0))
+            job["status"] = "done" if failed == 0 else "partial"
+            job["finished_at"] = datetime.now(timezone.utc).isoformat()
+
+    def _meteogram_warm_payload(self, job: Dict[str, object]) -> Dict[str, object]:
+        total = max(0, int(job.get("total_tasks", 0)))
+        completed = max(0, int(job.get("completed_tasks", 0)))
+        failed = max(0, int(job.get("failed_tasks", 0)))
+        percent = 100 if total == 0 else int(round((completed / float(total)) * 100))
+        payload = {
+            "job_id": str(job.get("job_id", "")),
+            "dataset_id": str(job.get("dataset_id", "")),
+            "init": str(job.get("init", "")),
+            "variables": list(job.get("variables", [])),
+            "types": list(job.get("types", [])),
+            "time_operator": str(job.get("time_operator", "none")),
+            "status": str(job.get("status", "queued")),
+            "created_at": job.get("created_at"),
+            "started_at": job.get("started_at"),
+            "finished_at": job.get("finished_at"),
+            "total_tasks": total,
+            "completed_tasks": completed,
+            "failed_tasks": failed,
+            "remaining_tasks": max(0, total - completed),
+            "percent_complete": max(0, min(100, percent)),
+            "ready": total > 0 and completed >= total and failed == 0,
+            "partial": total > 0 and completed >= total and failed > 0,
+            "errors": list(job.get("errors", [])),
+        }
+        return payload
+
+    def _cleanup_meteogram_warm_jobs_locked(self) -> None:
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=max(60, METEOGRAM_WARM_JOB_TTL_SECONDS))
+        stale_ids: List[str] = []
+        for job_id, job in self._meteogram_warm_jobs.items():
+            status = str(job.get("status", ""))
+            if status in {"queued", "running"}:
+                continue
+            finished_raw = str(job.get("finished_at") or "")
+            try:
+                finished_at = datetime.fromisoformat(finished_raw)
+            except (ValueError, TypeError):
+                finished_at = datetime.min.replace(tzinfo=timezone.utc)
+            if finished_at.tzinfo is None:
+                finished_at = finished_at.replace(tzinfo=timezone.utc)
+            if finished_at < cutoff:
+                stale_ids.append(job_id)
+        for job_id in stale_ids:
+            job = self._meteogram_warm_jobs.pop(job_id, None)
+            if not job:
+                continue
+            key = job.get("key")
+            if key in self._meteogram_warm_index:
+                self._meteogram_warm_index.pop(key, None)
+
     def _background_fetch_job(self, key: Tuple[str, ...]) -> None:
         if len(key) >= 6:
             dataset_id, type_id, variable_id, time_operator, init_str, lead_hour = key[:6]
@@ -553,10 +828,11 @@ class ForecastStore:
             if not init:
                 continue
             leads_available = set(self.lead_hours_for_init(ds.dataset_id, init))
-            if ds.dataset_id == "icon-ch2-eps-control":
-                prewarm_variables = ("t_2m", "tot_prec")
+            prewarm_variables = HOT_PREWARM_VARIABLES
+            if HOT_PREWARM_ALL_LEADS:
+                leads_to_prewarm = sorted(int(v) for v in leads_available)
             else:
-                prewarm_variables = HOT_PREWARM_VARIABLES
+                leads_to_prewarm = [int(v) for v in HOT_PREWARM_LEADS if int(v) in leads_available]
             for variable_id in prewarm_variables:
                 if self._background_fetch_inflight:
                     LOGGER.debug(
@@ -567,15 +843,13 @@ class ForecastStore:
                 if variable_id not in self._variables:
                     continue
                 for type_id in HOT_PREWARM_TYPES:
-                    for lead in HOT_PREWARM_LEADS:
+                    for lead in leads_to_prewarm:
                         if self._background_fetch_inflight:
                             LOGGER.debug(
                                 "Aborting hot prewarm lead loop: interactive fetches in-flight=%d",
                                 len(self._background_fetch_inflight),
                             )
                             return
-                        if lead not in leads_available:
-                            continue
                         try:
                             self.get_field(ds.dataset_id, variable_id, init, lead, type_id=type_id)
                         except Exception:
@@ -1014,8 +1288,9 @@ class ForecastStore:
         lon_frac = (lon - bounds["min_lon"]) / lon_span
         lat_frac = (bounds["max_lat"] - lat) / lat_span
 
-        x = int(np.clip(round(lon_frac * (self._grid_width - 1)), 0, self._grid_width - 1))
-        y = int(np.clip(round(lat_frac * (self._grid_height - 1)), 0, self._grid_height - 1))
+        h, w = field.shape
+        x = int(np.clip(round(lon_frac * (w - 1)), 0, w - 1))
+        y = int(np.clip(round(lat_frac * (h - 1)), 0, h - 1))
         return float(field[y, x])
 
     def get_cached_value(
@@ -1041,8 +1316,22 @@ class ForecastStore:
         lon_frac = (lon - bounds["min_lon"]) / lon_span
         lat_frac = (bounds["max_lat"] - lat) / lat_span
 
-        x = int(np.clip(round(lon_frac * (self._grid_width - 1)), 0, self._grid_width - 1))
-        y = int(np.clip(round(lat_frac * (self._grid_height - 1)), 0, self._grid_height - 1))
+        h, w = field.shape
+        x = int(np.clip(round(lon_frac * (w - 1)), 0, w - 1))
+        y = int(np.clip(round(lat_frac * (h - 1)), 0, h - 1))
+        return float(field[y, x])
+
+    def get_model_elevation(self, dataset_id: str, lat: float, lon: float) -> float:
+        self._dataset_config(dataset_id)
+        field = self._get_constant_field(dataset_id, "hsurf")
+        bounds = self.grid_bounds()
+        lon_span = max(1e-9, float(bounds["max_lon"] - bounds["min_lon"]))
+        lat_span = max(1e-9, float(bounds["max_lat"] - bounds["min_lat"]))
+        lon_frac = (float(lon) - float(bounds["min_lon"])) / lon_span
+        lat_frac = (float(bounds["max_lat"]) - float(lat)) / lat_span
+        h, w = field.shape
+        x = int(np.clip(round(lon_frac * (w - 1)), 0, w - 1))
+        y = int(np.clip(round(lat_frac * (h - 1)), 0, h - 1))
         return float(field[y, x])
 
     def grid_bounds(self) -> Dict[str, float]:
@@ -1319,6 +1608,212 @@ class ForecastStore:
             f"{FIELD_CACHE_VERSION}_{dataset_id}_{type_id}_wind_vectors_u2_{op_tag}_{init_str}_{lead_hour:03d}.npz"
         )
 
+    def _constant_field_cache_path(self, dataset_id: str, constant_id: str) -> Path:
+        return self._constant_cache_dir / f"{FIELD_CACHE_VERSION}_{dataset_id}_{constant_id}.npz"
+
+    def _get_constant_field(self, dataset_id: str, constant_id: str) -> np.ndarray:
+        key = (dataset_id, constant_id)
+        cached = self._constant_fields.get(key)
+        if cached is not None:
+            return cached
+        with self._constant_guard:
+            cached = self._constant_fields.get(key)
+            if cached is not None:
+                return cached
+            disk_path = self._constant_field_cache_path(dataset_id, constant_id)
+            if disk_path.exists():
+                loaded = self._load_cached_field_file(disk_path)
+                if loaded is not None:
+                    self._constant_fields[key] = loaded
+                    return loaded
+            field = self._fetch_constant_field(dataset_id, constant_id)
+            self._save_cached_field_file(disk_path, field)
+            self._constant_fields[key] = field
+            return field
+
+    def _fetch_constant_field(self, dataset_id: str, constant_id: str) -> np.ndarray:
+        if constant_id != "hsurf":
+            raise ValueError(f"Unknown constant field: {constant_id}")
+        self._ensure_eccodes_definition_path()
+        try:
+            from meteodatalab import ogd_api
+        except ImportError as exc:
+            raise RuntimeError(
+                "meteodata-lab is required for OGD ingestion. Install dependencies from requirements.txt"
+            ) from exc
+
+        cfg = self._dataset_config(dataset_id)
+        init_times = self.init_times(dataset_id)
+        if init_times:
+            try:
+                direct_field, _units, _display_offset, _info = self._fetch_direct_regridded(
+                    ogd_api=ogd_api,
+                    dataset_id=dataset_id,
+                    ogd_collection=cfg.ogd_collection,
+                    ogd_variable="HSURF",
+                    reference_iso=self._init_to_iso(str(init_times[0])),
+                    lead_hour=0,
+                    perturbed=False,
+                )
+                return direct_field.astype(np.float32)
+            except Exception as exc:
+                # Fall back to constants-file loading path below, but keep a trace
+                # for diagnosing elevation failures.
+                LOGGER.debug(
+                    "HSURF direct fetch failed for dataset=%s; falling back to constants asset: %s",
+                    dataset_id,
+                    exc,
+                )
+
+        source_urls: List[str] | None = None
+        local_cached = self._find_cached_constants_asset_path(dataset_id)
+        if local_cached is not None:
+            source_urls = [local_cached.resolve().as_uri()]
+        if not source_urls:
+            url = self._discover_constants_asset_url(dataset_id, ogd_api=ogd_api)
+            source_urls = self._materialize_asset_urls([url])
+        source = ogd_api.data_source.URLDataSource(urls=source_urls)
+        geo_coords = getattr(ogd_api, "_geo_coords", None)
+        result = ogd_api.grib_decoder.load(source, {"param": "HSURF"}, geo_coords=geo_coords)
+        if not result:
+            result = ogd_api.grib_decoder.load(source, {"param": "hsurf"}, geo_coords=geo_coords)
+        if not result:
+            raise OGDDecodeError(f"Failed to decode HSURF from constants asset for dataset={dataset_id}")
+        data_array = self._pick_best_array(result, "HSURF")
+        field = self._regrid_data_array(data_array, dataset_id).astype(np.float32)
+        return field
+
+    def _discover_constants_asset_url(self, dataset_id: str, ogd_api=None) -> str:
+        with self._constants_asset_guard:
+            cached = self._constants_asset_urls.get(dataset_id)
+            if cached:
+                return cached
+
+        # First fallback: derive constants URL from an OGD request asset listing.
+        if ogd_api is not None:
+            derived = self._derive_constants_url_from_ogd_assets(dataset_id, ogd_api)
+            if derived:
+                with self._constants_asset_guard:
+                    self._constants_asset_urls[dataset_id] = derived
+                return derived
+
+        from_items = self._discover_constants_asset_url_from_collection_items(dataset_id)
+        if from_items:
+            with self._constants_asset_guard:
+                self._constants_asset_urls[dataset_id] = from_items
+            return from_items
+
+        cfg = self._dataset_config(dataset_id)
+        body = {"collections": [cfg.collection_id], "limit": 3000}
+        features = self._search_stac_features(STAC_SEARCH_URL, body)
+        token = "icon-ch1-eps" if "ch1" in dataset_id else "icon-ch2-eps"
+        candidates: List[Tuple[str, str]] = []
+        for feature in features:
+            props = feature.get("properties", {}) if isinstance(feature, dict) else {}
+            ref = str(
+                props.get("forecast:reference_datetime")
+                or props.get("datetime")
+                or props.get("created")
+                or ""
+            )
+            assets = feature.get("assets", {}) if isinstance(feature, dict) else {}
+            if not isinstance(assets, dict):
+                continue
+            for asset in assets.values():
+                href = str((asset or {}).get("href", "")).strip()
+                if not href:
+                    continue
+                name = Path(urlparse(href).path).name.lower()
+                if "horizontal_constants" in name and token in name:
+                    candidates.append((ref, href))
+        if not candidates:
+            raise OGDRequestError(f"No constants asset found in STAC for dataset={dataset_id}")
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        resolved = candidates[0][1]
+        with self._constants_asset_guard:
+            self._constants_asset_urls[dataset_id] = resolved
+        return resolved
+
+    def _discover_constants_asset_url_from_collection_items(self, dataset_id: str) -> str | None:
+        cfg = self._dataset_config(dataset_id)
+        token = "horizontal_constants_icon-ch1-eps" if "ch1" in dataset_id else "horizontal_constants_icon-ch2-eps"
+        url = f"https://data.geo.admin.ch/api/stac/v1/collections/{cfg.collection_id}/items?limit=500"
+        visited: set[str] = set()
+        best_href = None
+        best_ref = ""
+        pages = 0
+        while url and url not in visited and pages < 30:
+            visited.add(url)
+            pages += 1
+            try:
+                resp = requests.get(url, timeout=12)
+                resp.raise_for_status()
+                payload = resp.json()
+            except Exception:
+                break
+            features = payload.get("features", [])
+            if isinstance(features, list):
+                for feature in features:
+                    props = feature.get("properties", {}) if isinstance(feature, dict) else {}
+                    ref = str(
+                        props.get("forecast:reference_datetime")
+                        or props.get("datetime")
+                        or props.get("created")
+                        or ""
+                    )
+                    assets = feature.get("assets", {}) if isinstance(feature, dict) else {}
+                    if not isinstance(assets, dict):
+                        continue
+                    for asset in assets.values():
+                        href = str((asset or {}).get("href", "")).strip()
+                        if not href:
+                            continue
+                        name = Path(urlparse(href).path).name.lower()
+                        if token in name and ref >= best_ref:
+                            best_ref = ref
+                            best_href = href
+            next_url = None
+            for link in payload.get("links", []):
+                if isinstance(link, dict) and link.get("rel") == "next":
+                    next_url = str(link.get("href", "")).strip() or None
+                    break
+            url = next_url
+        return best_href
+
+    def _derive_constants_url_from_ogd_assets(self, dataset_id: str, ogd_api) -> str | None:
+        cfg = self._dataset_config(dataset_id)
+        init_times = self.init_times(dataset_id)
+        if not init_times:
+            return None
+        init_str = str(init_times[0])
+        leads = self.lead_hours_for_init(dataset_id, init_str)
+        lead_hour = int(leads[0]) if leads else 0
+        request = ogd_api.Request(
+            collection=cfg.ogd_collection,
+            variable=self._catalog_reference_ogd_variable,
+            reference_datetime=self._init_to_iso(init_str),
+            perturbed=False,
+            horizon=timedelta(hours=lead_hour),
+        )
+        urls = self._safe_asset_urls_for_request(ogd_api, request)
+        token = "horizontal_constants_icon-ch1-eps" if "ch1" in dataset_id else "horizontal_constants_icon-ch2-eps"
+        for url in urls:
+            name = Path(urlparse(str(url)).path).name.lower()
+            if token in name:
+                return str(url)
+        return None
+
+    def _find_cached_constants_asset_path(self, dataset_id: str) -> Path | None:
+        token = "horizontal_constants_icon-ch1-eps" if "ch1" in dataset_id else "horizontal_constants_icon-ch2-eps"
+        candidates: List[Path] = []
+        for path in self._grib_asset_cache_dir.glob(f"*{token}*.grib2"):
+            if path.is_file() and path.stat().st_size > 0:
+                candidates.append(path)
+        if not candidates:
+            return None
+        candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        return candidates[0]
+
     @staticmethod
     def _field_debug_path(field_cache_path: Path) -> Path:
         return field_cache_path.with_suffix(".json")
@@ -1463,26 +1958,26 @@ class ForecastStore:
         reference_iso = self._init_to_iso(init_str)
         if type_id == "control":
             u_field, u_units, _u_offset, _u_info = self._fetch_direct_regridded(
-                ogd_api, cfg.ogd_collection, "U_10M", reference_iso, lead_hour
+                ogd_api, dataset_id, cfg.ogd_collection, "U_10M", reference_iso, lead_hour
             )
             v_field, v_units, _v_offset, _v_info = self._fetch_direct_regridded(
-                ogd_api, cfg.ogd_collection, "V_10M", reference_iso, lead_hour
+                ogd_api, dataset_id, cfg.ogd_collection, "V_10M", reference_iso, lead_hour
             )
             u_field = self._normalize_variable_units(u_field, "wind_speed_10m", units_hint=u_units).astype(np.float32)
             v_field = self._normalize_variable_units(v_field, "wind_speed_10m", units_hint=v_units).astype(np.float32)
             return u_field, v_field
 
         u_ctrl, u_ctrl_units, _u_ctrl_offset, _u_ctrl_info = self._fetch_direct_regridded(
-            ogd_api, cfg.ogd_collection, "U_10M", reference_iso, lead_hour
+            ogd_api, dataset_id, cfg.ogd_collection, "U_10M", reference_iso, lead_hour
         )
         v_ctrl, v_ctrl_units, _v_ctrl_offset, _v_ctrl_info = self._fetch_direct_regridded(
-            ogd_api, cfg.ogd_collection, "V_10M", reference_iso, lead_hour
+            ogd_api, dataset_id, cfg.ogd_collection, "V_10M", reference_iso, lead_hour
         )
         u_ens, u_ens_units, _u_ens_offset, _u_ens_info = self._fetch_direct_member_stack(
-            ogd_api, cfg.ogd_collection, "U_10M", reference_iso, lead_hour
+            ogd_api, dataset_id, cfg.ogd_collection, "U_10M", reference_iso, lead_hour
         )
         v_ens, v_ens_units, _v_ens_offset, _v_ens_info = self._fetch_direct_member_stack(
-            ogd_api, cfg.ogd_collection, "V_10M", reference_iso, lead_hour
+            ogd_api, dataset_id, cfg.ogd_collection, "V_10M", reference_iso, lead_hour
         )
 
         u_ctrl = self._normalize_variable_units(u_ctrl, "wind_speed_10m", units_hint=u_ctrl_units).astype(np.float32)
@@ -1516,10 +2011,10 @@ class ForecastStore:
         if variable.ogd_components:
             if tuple(variable.ogd_components) == ("U_10M", "V_10M"):
                 u_field, u_units, _u_offset, u_info = self._fetch_direct_regridded(
-                    ogd_api, ogd_collection, "U_10M", reference_iso, lead_hour
+                    ogd_api, dataset_id, ogd_collection, "U_10M", reference_iso, lead_hour
                 )
                 v_field, v_units, _v_offset, v_info = self._fetch_direct_regridded(
-                    ogd_api, ogd_collection, "V_10M", reference_iso, lead_hour
+                    ogd_api, dataset_id, ogd_collection, "V_10M", reference_iso, lead_hour
                 )
                 u_field = self._normalize_variable_units(u_field, "wind_speed_10m", units_hint=u_units)
                 v_field = self._normalize_variable_units(v_field, "wind_speed_10m", units_hint=v_units)
@@ -1535,7 +2030,7 @@ class ForecastStore:
             raise RuntimeError(f"Variable {variable_id} has no direct OGD mapping")
 
         field, units, display_offset, info = self._fetch_direct_regridded(
-            ogd_api, ogd_collection, variable.ogd_variable, reference_iso, lead_hour
+            ogd_api, dataset_id, ogd_collection, variable.ogd_variable, reference_iso, lead_hour
         )
         deagg_kind, deagg_note = self._deaggregate_kind_for_field(variable_id, info)
         if deagg_kind and deagg_note.startswith("Applied variable-level fallback"):
@@ -1551,7 +2046,7 @@ class ForecastStore:
             previous_lead = self._previous_available_lead(dataset_id, init_str, lead_hour)
             if previous_lead is not None:
                 prev_field, _prev_units, _prev_display_offset, prev_info = self._fetch_direct_regridded(
-                    ogd_api, ogd_collection, variable.ogd_variable, reference_iso, previous_lead
+                    ogd_api, dataset_id, ogd_collection, variable.ogd_variable, reference_iso, previous_lead
                 )
                 prev_end = self._field_end_step(prev_info, previous_lead)
                 end_step = self._field_end_step(info, lead_hour)
@@ -1601,16 +2096,16 @@ class ForecastStore:
             if tuple(variable.ogd_components) != ("U_10M", "V_10M"):
                 raise RuntimeError(f"Unsupported derived variable: {variable_id}")
             u_ctrl, u_ctrl_units, _u_ctrl_offset, u_ctrl_info = self._fetch_direct_regridded(
-                ogd_api, ogd_collection, "U_10M", reference_iso, lead_hour
+                ogd_api, dataset_id, ogd_collection, "U_10M", reference_iso, lead_hour
             )
             v_ctrl, v_ctrl_units, _v_ctrl_offset, v_ctrl_info = self._fetch_direct_regridded(
-                ogd_api, ogd_collection, "V_10M", reference_iso, lead_hour
+                ogd_api, dataset_id, ogd_collection, "V_10M", reference_iso, lead_hour
             )
             u_ens, u_ens_units, _u_ens_offset, u_ens_info = self._fetch_direct_member_stack(
-                ogd_api, ogd_collection, "U_10M", reference_iso, lead_hour
+                ogd_api, dataset_id, ogd_collection, "U_10M", reference_iso, lead_hour
             )
             v_ens, v_ens_units, _v_ens_offset, v_ens_info = self._fetch_direct_member_stack(
-                ogd_api, ogd_collection, "V_10M", reference_iso, lead_hour
+                ogd_api, dataset_id, ogd_collection, "V_10M", reference_iso, lead_hour
             )
 
             u_ctrl = self._normalize_variable_units(u_ctrl, "wind_speed_10m", units_hint=u_ctrl_units).astype(np.float32)
@@ -1639,10 +2134,10 @@ class ForecastStore:
             raise RuntimeError(f"Variable {variable_id} has no direct OGD mapping")
 
         ctrl, ctrl_units, ctrl_display_offset, ctrl_info = self._fetch_direct_regridded(
-            ogd_api, ogd_collection, variable.ogd_variable, reference_iso, lead_hour
+            ogd_api, dataset_id, ogd_collection, variable.ogd_variable, reference_iso, lead_hour
         )
         ens, ens_units, _ens_display_offset, ens_info = self._fetch_direct_member_stack(
-            ogd_api, ogd_collection, variable.ogd_variable, reference_iso, lead_hour
+            ogd_api, dataset_id, ogd_collection, variable.ogd_variable, reference_iso, lead_hour
         )
         deagg_kind, deagg_note = self._deaggregate_kind_for_field(variable_id, ctrl_info)
         if deagg_kind and deagg_note.startswith("Applied variable-level fallback"):
@@ -1658,10 +2153,10 @@ class ForecastStore:
             previous_lead = self._previous_available_lead(dataset_id, init_str, lead_hour)
             if previous_lead is not None:
                 prev_ctrl, _pctrl_units, _pctrl_offset, prev_ctrl_info = self._fetch_direct_regridded(
-                    ogd_api, ogd_collection, variable.ogd_variable, reference_iso, previous_lead
+                    ogd_api, dataset_id, ogd_collection, variable.ogd_variable, reference_iso, previous_lead
                 )
                 prev_ens, _pens_units, _pens_offset, prev_ens_info = self._fetch_direct_member_stack(
-                    ogd_api, ogd_collection, variable.ogd_variable, reference_iso, previous_lead
+                    ogd_api, dataset_id, ogd_collection, variable.ogd_variable, reference_iso, previous_lead
                 )
                 prev_end = self._field_end_step(prev_ctrl_info, previous_lead)
                 end_step = self._field_end_step(ctrl_info, lead_hour)
@@ -1721,6 +2216,7 @@ class ForecastStore:
     def _fetch_direct_regridded(
         self,
         ogd_api,
+        dataset_id: str,
         ogd_collection: str,
         ogd_variable: str,
         reference_iso: str,
@@ -1746,11 +2242,10 @@ class ForecastStore:
                             raise OGDRequestError(
                                 f"No OGD assets for variable={candidate_variable} ref={reference_iso} lead={effective_lead}"
                             )
-                        try:
-                            data_array = ogd_api.get_from_ogd(request)
-                        except KeyError as exc:
-                            data_array = self._load_with_decode_fallbacks(ogd_api, request, exc)
-                        field = self._regrid_data_array(data_array).astype(np.float32)
+                        data_array = self._load_with_decode_fallbacks(
+                            ogd_api, request, original_error=None, asset_urls=asset_urls
+                        )
+                        field = self._regrid_data_array(data_array, dataset_id).astype(np.float32)
                         units = self._extract_units_hint(data_array, candidate_variable)
                         display_offset = self._extract_display_lead_offset_hours(data_array, requested_lead)
                         agg_meta = self._extract_aggregation_metadata(data_array)
@@ -1783,6 +2278,7 @@ class ForecastStore:
     def _fetch_direct_member_stack(
         self,
         ogd_api,
+        dataset_id: str,
         ogd_collection: str,
         ogd_variable: str,
         reference_iso: str,
@@ -1807,11 +2303,10 @@ class ForecastStore:
                             raise OGDRequestError(
                                 f"No OGD assets for variable={candidate_variable} ref={reference_iso} lead={effective_lead} (perturbed)"
                             )
-                        try:
-                            data_array = ogd_api.get_from_ogd(request)
-                        except KeyError as exc:
-                            data_array = self._load_with_decode_fallbacks(ogd_api, request, exc)
-                        members = self._regrid_member_stack(data_array).astype(np.float32)
+                        data_array = self._load_with_decode_fallbacks(
+                            ogd_api, request, original_error=None, asset_urls=asset_urls
+                        )
+                        members = self._regrid_member_stack(data_array, dataset_id).astype(np.float32)
                         units = self._extract_units_hint(data_array, candidate_variable)
                         display_offset = self._extract_display_lead_offset_hours(data_array, requested_lead)
                         agg_meta = self._extract_aggregation_metadata(data_array)
@@ -1890,6 +2385,147 @@ class ForecastStore:
             return []
         return [str(u) for u in urls if str(u).strip()]
 
+    def _materialize_asset_urls(self, asset_urls: List[str]) -> List[str]:
+        if not GRIB_ASSET_CACHE_ENABLED:
+            return [str(u) for u in asset_urls]
+        work: List[Tuple[str, Path]] = []
+        for url in asset_urls:
+            url_text = str(url).strip()
+            if not url_text:
+                continue
+            work.append((url_text, self._grib_asset_path_for_url(url_text)))
+        futures: List[Future] = [self._ensure_grib_asset_cached(url_text, cache_path) for url_text, cache_path in work]
+        for fut in futures:
+            fut.result()
+        resolved: List[str] = []
+        for _, cache_path in work:
+            resolved.append(cache_path.resolve().as_uri())
+        self._cleanup_grib_asset_cache(force=False)
+        return resolved
+
+    def _grib_asset_lock_for_key(self, key: str) -> threading.Lock:
+        with self._grib_asset_key_locks_guard:
+            lock = self._grib_asset_key_locks.get(key)
+            if lock is None:
+                lock = threading.Lock()
+                self._grib_asset_key_locks[key] = lock
+            return lock
+
+    def _ensure_grib_asset_cached(self, url_text: str, cache_path: Path) -> Future:
+        key = str(cache_path)
+        lock = self._grib_asset_lock_for_key(cache_path.name)
+
+        # Fast path: already cached.
+        with lock:
+            if cache_path.exists() and cache_path.stat().st_size > 0:
+                try:
+                    os.utime(cache_path, None)
+                except OSError:
+                    pass
+                done: Future = Future()
+                done.set_result(cache_path)
+                LOGGER.debug("GRIB asset cache hit path=%s", cache_path.name)
+                return done
+
+        with self._grib_download_futures_guard:
+            existing = self._grib_download_futures.get(key)
+            if existing is not None:
+                return existing
+            fut = self._grib_download_executor.submit(self._download_asset_to_cache, url_text, cache_path)
+            self._grib_download_futures[key] = fut
+            fut.add_done_callback(lambda _f, k=key: self._pop_grib_download_future(k))
+            return fut
+
+    def _pop_grib_download_future(self, key: str) -> None:
+        with self._grib_download_futures_guard:
+            self._grib_download_futures.pop(key, None)
+
+    def _grib_asset_path_for_url(self, url_text: str) -> Path:
+        parsed = urlparse(url_text)
+        normalized = parsed.path or url_text
+        digest = hashlib.sha1(normalized.encode("utf-8")).hexdigest()[:20]
+        name_path = Path(parsed.path)
+        suffix = name_path.suffix or ".bin"
+        stem = name_path.stem or "asset"
+        stem = re.sub(r"[^a-zA-Z0-9._-]+", "_", stem)[:80]
+        return self._grib_asset_cache_dir / f"{digest}_{stem}{suffix}"
+
+    def _download_asset_to_cache(self, url_text: str, cache_path: Path) -> None:
+        tmp_path = cache_path.with_suffix(cache_path.suffix + ".part")
+        lock = self._grib_asset_lock_for_key(cache_path.name)
+        with lock:
+            if cache_path.exists() and cache_path.stat().st_size > 0:
+                try:
+                    os.utime(cache_path, None)
+                except OSError:
+                    pass
+                LOGGER.debug("GRIB asset cache hit path=%s", cache_path.name)
+                return
+        try:
+            resp = requests.get(url_text, stream=True, timeout=(10, 180))
+            resp.raise_for_status()
+            with tmp_path.open("wb") as fh:
+                for chunk in resp.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        fh.write(chunk)
+            with lock:
+                os.replace(tmp_path, cache_path)
+            LOGGER.debug(
+                "Saved GRIB asset cache path=%s bytes=%s url=%s",
+                cache_path,
+                cache_path.stat().st_size if cache_path.exists() else -1,
+                Path(urlparse(url_text).path).name,
+            )
+        finally:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    def _cleanup_grib_asset_cache(self, force: bool = False) -> None:
+        if not GRIB_ASSET_CACHE_ENABLED:
+            return
+        with self._grib_asset_cache_guard:
+            if self._background_fetch_inflight:
+                return
+            with self._grib_download_futures_guard:
+                if self._grib_download_futures:
+                    return
+            now = datetime.now(timezone.utc)
+            if not force and (
+                now - self._last_grib_asset_cleanup_at
+            ).total_seconds() < FIELD_CACHE_CLEANUP_INTERVAL_SECONDS:
+                return
+            self._last_grib_asset_cleanup_at = now
+            cutoff = now - timedelta(hours=GRIB_ASSET_CACHE_TTL_HOURS)
+            files: List[Path] = []
+            total_size = 0
+            for path in self._grib_asset_cache_dir.glob("*"):
+                if not path.is_file():
+                    continue
+                try:
+                    stat = path.stat()
+                except OSError:
+                    continue
+                mtime = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
+                if mtime < cutoff:
+                    self._safe_unlink(path)
+                    continue
+                files.append(path)
+                total_size += int(stat.st_size)
+            if total_size <= GRIB_ASSET_CACHE_MAX_BYTES:
+                return
+            files.sort(key=lambda p: p.stat().st_atime if p.exists() else 0.0)
+            for path in files:
+                if total_size <= GRIB_ASSET_CACHE_MAX_BYTES:
+                    break
+                try:
+                    size = int(path.stat().st_size)
+                except OSError:
+                    size = 0
+                self._safe_unlink(path)
+                total_size = max(0, total_size - size)
+
     def _previous_available_lead(self, dataset_id: str, init_str: str, lead_hour: int) -> int | None:
         leads = [int(v) for v in self.lead_hours_for_init(dataset_id, init_str)]
         previous = [v for v in leads if v < int(lead_hour)]
@@ -1946,6 +2582,10 @@ class ForecastStore:
             return np.nanpercentile(members, 10, axis=0).astype(np.float32)
         if type_id == "p90":
             return np.nanpercentile(members, 90, axis=0).astype(np.float32)
+        if type_id == "min":
+            return np.nanmin(members, axis=0).astype(np.float32)
+        if type_id == "max":
+            return np.nanmax(members, axis=0).astype(np.float32)
         raise ValueError(f"Unsupported ensemble statistic: {type_id}")
 
     def _normalize_variable_units(self, field: np.ndarray, variable_id: str, units_hint: str) -> np.ndarray:
@@ -2240,9 +2880,18 @@ class ForecastStore:
                 out.append(name)
         return out
 
-    def _load_with_decode_fallbacks(self, ogd_api, request, original_error: Exception):
-        urls = ogd_api.get_asset_urls(request)
-        source = ogd_api.data_source.URLDataSource(urls=urls)
+    def _load_with_decode_fallbacks(
+        self,
+        ogd_api,
+        request,
+        original_error: Exception | None,
+        asset_urls: List[str] | None = None,
+    ):
+        urls = [str(u) for u in (asset_urls or ogd_api.get_asset_urls(request) or []) if str(u).strip()]
+        if not urls:
+            raise OGDRequestError(f"No OGD assets for variable={request.variable}")
+        source_urls = self._materialize_asset_urls(urls)
+        source = ogd_api.data_source.URLDataSource(urls=source_urls)
         geo_coords = getattr(ogd_api, "_geo_coords", None)
 
         candidates = self._decode_param_candidates(request.variable)
@@ -2257,10 +2906,18 @@ class ForecastStore:
         try:
             result = ogd_api.grib_decoder.load(source, {}, geo_coords=geo_coords)
         except Exception as exc:
-            raise OGDDecodeError(f"Failed to decode OGD asset for variable {request.variable}: {exc}") from exc
+            try:
+                return ogd_api.get_from_ogd(request)
+            except Exception:
+                raise OGDDecodeError(f"Failed to decode OGD asset for variable {request.variable}: {exc}") from exc
 
         if not result:
-            raise OGDDecodeError(f"Decoded OGD asset is empty for variable {request.variable}") from original_error
+            try:
+                return ogd_api.get_from_ogd(request)
+            except Exception:
+                raise OGDDecodeError(
+                    f"Decoded OGD asset is empty for variable {request.variable}"
+                ) from (original_error or RuntimeError("Empty decode result"))
 
         return self._pick_best_array(result, request.variable)
 
@@ -2295,6 +2952,7 @@ class ForecastStore:
             "ALHFL_S": ["ALHFL_S", "alhfl_s"],
             "CAPE_ML": ["CAPE_ML", "cape_ml", "cape"],
             "CIN_ML": ["CIN_ML", "cin_ml", "cin"],
+            "HSURF": ["HSURF", "hsurf", "orog", "z"],
         }
         return mapping.get(upper, [stac_variable, stac_variable.lower()])
 
@@ -2331,6 +2989,7 @@ class ForecastStore:
             "ALHFL_S": ["alhfl_s"],
             "CAPE_ML": ["cape_ml", "cape"],
             "CIN_ML": ["cin_ml", "cin"],
+            "HSURF": ["hsurf", "orog", "z"],
         }
         for alias in aliases.get(requested_variable.upper(), []):
             if alias in result_map:
@@ -2373,12 +3032,12 @@ class ForecastStore:
                 self._key_locks[key] = lock
             return lock
 
-    def _regrid_data_array(self, data_array) -> np.ndarray:
+    def _regrid_data_array(self, data_array, dataset_id: str) -> np.ndarray:
         values = np.asarray(data_array).squeeze()
         lat, lon = self._extract_lat_lon(data_array, values.shape)
-        return self._regrid_values(values, lat, lon)
+        return self._regrid_values(values, lat, lon, dataset_id)
 
-    def _regrid_member_stack(self, data_array) -> np.ndarray:
+    def _regrid_member_stack(self, data_array, dataset_id: str) -> np.ndarray:
         values = np.asarray(data_array)
         if values.ndim == 0:
             raise RuntimeError("Unexpected scalar ensemble payload")
@@ -2403,7 +3062,7 @@ class ForecastStore:
         moved = np.moveaxis(values, member_axis, 0)
         spatial_shape = moved.shape[1:]
         lat, lon = self._extract_lat_lon(data_array, spatial_shape)
-        regridded = [self._regrid_values(moved[idx], lat, lon) for idx in range(moved.shape[0])]
+        regridded = [self._regrid_values(moved[idx], lat, lon, dataset_id) for idx in range(moved.shape[0])]
         return np.stack(regridded, axis=0).astype(np.float32)
 
     @staticmethod
@@ -2415,7 +3074,7 @@ class ForecastStore:
         # Be strict to avoid reducing over the wrong axis when metadata changes.
         return None
 
-    def _regrid_values(self, values: np.ndarray, lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
+    def _regrid_values(self, values: np.ndarray, lat: np.ndarray, lon: np.ndarray, dataset_id: str) -> np.ndarray:
         values = np.asarray(values)
 
         flat_values = values.reshape(-1).astype(np.float64)
@@ -2429,8 +3088,9 @@ class ForecastStore:
 
         self._expand_grid_bounds(flat_lat, flat_lon)
         bounds = self.grid_bounds()
-        lat_edges = np.linspace(bounds["min_lat"], bounds["max_lat"], self._grid_height + 1)
-        lon_edges = np.linspace(bounds["min_lon"], bounds["max_lon"], self._grid_width + 1)
+        grid_width, grid_height = self._target_grid_shape(dataset_id)
+        lat_edges = np.linspace(bounds["min_lat"], bounds["max_lat"], grid_height + 1)
+        lon_edges = np.linspace(bounds["min_lon"], bounds["max_lon"], grid_width + 1)
 
         val_sum, _, _ = np.histogram2d(flat_lat, flat_lon, bins=[lat_edges, lon_edges], weights=flat_values)
         val_count, _, _ = np.histogram2d(flat_lat, flat_lon, bins=[lat_edges, lon_edges])
@@ -2441,6 +3101,10 @@ class ForecastStore:
         grid = np.flipud(grid)
         grid = self._fill_nan_with_neighbors(grid)
         return grid
+
+    def _target_grid_shape(self, dataset_id: str) -> Tuple[int, int]:
+        cfg = self._dataset_config(dataset_id)
+        return int(cfg.target_grid_width), int(cfg.target_grid_height)
 
     def _expand_grid_bounds(self, lat: np.ndarray, lon: np.ndarray) -> None:
         if lat.size == 0 or lon.size == 0:
@@ -2802,6 +3466,7 @@ class ForecastStore:
                     continue
                 if init_dt < cutoff:
                     self._safe_unlink(path)
+        self._cleanup_grib_asset_cache(force=force)
 
     def _prune_memory_cache(self, keep_inits_by_dataset: Dict[str, set[str]], cutoff: datetime) -> None:
         drop_keys: List[Tuple[str, ...]] = []

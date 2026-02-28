@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 import json
 from datetime import datetime, timedelta
+import types
 
 import numpy as np
 
@@ -224,6 +225,72 @@ class WeatherDataTests(unittest.TestCase):
                 )
         np.testing.assert_allclose(field, np.ones((2, 2), dtype=np.float32) * 3.0)
         self.assertEqual(info["window_leads"], [0, 1])
+
+    def test_fetch_constant_field_falls_back_to_constants_asset_when_direct_fetch_fails(self):
+        store = ForecastStore()
+        dataset_id = "icon-ch1-eps-control"
+
+        class _FakeURLDataSource:
+            def __init__(self, urls):
+                self.urls = urls
+
+        class _FakeGribDecoder:
+            def load(self, _source, _query, geo_coords=None):
+                _ = geo_coords
+                return [object()]
+
+        fake_ogd_api = types.SimpleNamespace(
+            data_source=types.SimpleNamespace(URLDataSource=_FakeURLDataSource),
+            grib_decoder=_FakeGribDecoder(),
+            _geo_coords=None,
+        )
+
+        with patch.object(store, "_ensure_eccodes_definition_path", return_value=None), patch.object(
+            store, "init_times", return_value=["2026022500"]
+        ), patch.object(store, "_fetch_direct_regridded", side_effect=RuntimeError("direct fetch failed")), patch.object(
+            store, "_discover_constants_asset_url", return_value="https://example/horizontal_constants_icon-ch1-eps.grib2"
+        ) as mocked_discover, patch.object(
+            store, "_materialize_asset_urls", return_value=["file:///tmp/horizontal_constants_icon-ch1-eps.grib2"]
+        ), patch.object(
+            store, "_pick_best_array", return_value=np.ones((2, 2), dtype=np.float32)
+        ), patch.object(
+            store, "_regrid_data_array", return_value=np.ones((3, 4), dtype=np.float32) * 123.0
+        ), patch.dict(
+            "sys.modules", {"meteodatalab": types.SimpleNamespace(ogd_api=fake_ogd_api)}
+        ):
+            field = store._fetch_constant_field(dataset_id, "hsurf")
+
+        mocked_discover.assert_called_once()
+        self.assertEqual(field.shape, (3, 4))
+        np.testing.assert_allclose(field, np.ones((3, 4), dtype=np.float32) * 123.0)
+
+    def test_meteogram_warmup_reuses_completed_job_for_same_request(self):
+        store = ForecastStore()
+        init = store.init_times("icon-ch1-eps-control")[0]
+        with patch.object(store, "lead_hours_for_init", return_value=[0]), patch.object(
+            store,
+            "_compute_meteogram_warm_tasks",
+            return_value=(1, 1, []),
+        ) as mocked_compute:
+            first = store.start_meteogram_warmup(
+                dataset_id="icon-ch1-eps-control",
+                init_str=init,
+                variable_ids=["t_2m"],
+                type_ids=["control"],
+                time_operator="none",
+            )
+            second = store.start_meteogram_warmup(
+                dataset_id="icon-ch1-eps-control",
+                init_str=init,
+                variable_ids=["t_2m"],
+                type_ids=["control"],
+                time_operator="none",
+            )
+
+        self.assertEqual(first["job_id"], second["job_id"])
+        self.assertEqual(first["status"], "done")
+        self.assertEqual(second["status"], "done")
+        self.assertEqual(mocked_compute.call_count, 1)
 
 
 if __name__ == "__main__":

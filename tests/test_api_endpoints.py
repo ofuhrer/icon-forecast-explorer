@@ -47,6 +47,23 @@ class _FakeStore:
         self.refresh_calls = []
         self._grid_width = 540
         self._grid_height = 380
+        self._warmup_payload = {
+            "job_id": "mw-test-1",
+            "dataset_id": "icon-ch1-eps-control",
+            "init": "2026022500",
+            "variables": ["t_2m"],
+            "types": ["control"],
+            "time_operator": "none",
+            "status": "running",
+            "total_tasks": 2,
+            "completed_tasks": 1,
+            "failed_tasks": 0,
+            "remaining_tasks": 1,
+            "percent_complete": 50,
+            "ready": False,
+            "partial": False,
+            "errors": [],
+        }
 
     def start_background_prewarm(self):
         return None
@@ -101,6 +118,15 @@ class _FakeStore:
     ):
         return None
 
+    def start_meteogram_warmup(self, dataset_id, init_str, variable_ids, type_ids, time_operator="none"):
+        _ = (dataset_id, init_str, variable_ids, type_ids, time_operator)
+        return dict(self._warmup_payload)
+
+    def get_meteogram_warmup(self, job_id):
+        if str(job_id) != "mw-test-1":
+            raise KeyError(str(job_id))
+        return dict(self._warmup_payload)
+
 
 class _EmptyMetaStore(_FakeStore):
     dataset_metas = []
@@ -129,6 +155,12 @@ class _CacheMissStore(_FakeStore):
 class _ValueMissStore(_FakeStore):
     def get_cached_value(self, dataset_id, variable_id, init, lead, lat, lon, type_id="control", time_operator="none"):
         return None
+
+
+class _ElevationErrorStore(_FakeStore):
+    def get_model_elevation(self, dataset_id, lat, lon):
+        _ = (dataset_id, lat, lon)
+        raise RuntimeError("HSURF unavailable")
 
 
 @unittest.skipIf(app_module is None, "fastapi dependencies not available")
@@ -227,6 +259,44 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertEqual(payload["status"], "ready")
         self.assertIn("vectors", payload)
         self.assertGreater(len(payload["vectors"]), 0)
+
+    def test_model_elevation_returns_503_on_runtime_error(self):
+        fake_store = _ElevationErrorStore()
+        with patch.object(app_module, "store", fake_store):
+            with self.assertRaises(app_module.HTTPException) as ctx:
+                app_module.model_elevation(
+                    dataset_id="icon-ch1-eps-control",
+                    lat=47.0,
+                    lon=8.0,
+                )
+        self.assertEqual(ctx.exception.status_code, 503)
+
+    def test_meteogram_warmup_start_returns_payload(self):
+        fake_store = _FakeStore()
+        with patch.object(app_module, "store", fake_store):
+            payload = app_module.meteogram_warmup_start(
+                dataset_id="icon-ch1-eps-control",
+                init="2026022500",
+                variables="t_2m",
+                types="control",
+                time_operator="none",
+            )
+        self.assertEqual(payload["job_id"], "mw-test-1")
+        self.assertEqual(payload["status"], "running")
+
+    def test_meteogram_warmup_status_returns_payload(self):
+        fake_store = _FakeStore()
+        with patch.object(app_module, "store", fake_store):
+            payload = app_module.meteogram_warmup_status(job_id="mw-test-1")
+        self.assertEqual(payload["job_id"], "mw-test-1")
+        self.assertEqual(payload["percent_complete"], 50)
+
+    def test_meteogram_warmup_status_unknown_job_raises_404(self):
+        fake_store = _FakeStore()
+        with patch.object(app_module, "store", fake_store):
+            with self.assertRaises(app_module.HTTPException) as ctx:
+                app_module.meteogram_warmup_status(job_id="mw-unknown")
+        self.assertEqual(ctx.exception.status_code, 404)
 
 
 if __name__ == "__main__":

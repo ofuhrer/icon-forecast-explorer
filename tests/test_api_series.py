@@ -1,5 +1,6 @@
 import unittest
 from unittest.mock import patch
+import types
 
 try:
     import app as app_module
@@ -54,6 +55,25 @@ class _CountingStore:
     def get_value(self, dataset_id, variable_id, init, lead, lat, lon, type_id="control", time_operator="none"):
         self.calls += 1
         return 2.0 + lead
+
+
+class _GridAwareCountingStore(_CountingStore):
+    dataset_metas = [
+        types.SimpleNamespace(
+            dataset_id="icon-ch1-eps-control",
+            target_grid_width=20,
+            target_grid_height=20,
+        )
+    ]
+
+    @staticmethod
+    def grid_bounds():
+        return {
+            "min_lat": 45.75,
+            "max_lat": 47.9,
+            "min_lon": 5.9,
+            "max_lon": 10.7,
+        }
 
 
 class ApiSeriesTests(unittest.TestCase):
@@ -184,8 +204,60 @@ class ApiSeriesTests(unittest.TestCase):
                 dataset_id="icon-ch1-eps-control",
                 variable_id="t_2m",
                 init="2026022500",
-                lat=47.002,
-                lon=8.002,
+                lat=47.001,
+                lon=8.001,
+                types="control",
+                cached_only=True,
+            )
+        self.assertFalse(payload1["diagnostics"]["cache_hit"])
+        self.assertTrue(payload2["diagnostics"]["cache_hit"])
+        self.assertEqual(counting_store.calls, 2)
+
+    @unittest.skipIf(app_module is None, "fastapi app dependencies not available in current interpreter")
+    def test_series_cache_miss_for_different_coordinates_without_grid_metadata(self):
+        counting_store = _CountingStore()
+        with patch.object(app_module, "store", counting_store):
+            payload1 = app_module.series(
+                dataset_id="icon-ch1-eps-control",
+                variable_id="t_2m",
+                init="2026022500",
+                lat=47.001,
+                lon=8.001,
+                types="control",
+                cached_only=True,
+            )
+            payload2 = app_module.series(
+                dataset_id="icon-ch1-eps-control",
+                variable_id="t_2m",
+                init="2026022500",
+                lat=47.250,
+                lon=8.250,
+                types="control",
+                cached_only=True,
+            )
+        self.assertFalse(payload1["diagnostics"]["cache_hit"])
+        self.assertFalse(payload2["diagnostics"]["cache_hit"])
+        self.assertEqual(counting_store.calls, 4)
+
+    @unittest.skipIf(app_module is None, "fastapi app dependencies not available in current interpreter")
+    def test_series_cache_reuses_values_within_same_grid_cell_when_metadata_is_available(self):
+        counting_store = _GridAwareCountingStore()
+        with patch.object(app_module, "store", counting_store):
+            payload1 = app_module.series(
+                dataset_id="icon-ch1-eps-control",
+                variable_id="t_2m",
+                init="2026022500",
+                lat=47.1000,
+                lon=8.2000,
+                types="control",
+                cached_only=True,
+            )
+            payload2 = app_module.series(
+                dataset_id="icon-ch1-eps-control",
+                variable_id="t_2m",
+                init="2026022500",
+                lat=47.1003,
+                lon=8.2002,
                 types="control",
                 cached_only=True,
             )
