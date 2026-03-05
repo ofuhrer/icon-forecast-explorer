@@ -10,11 +10,22 @@ Applies to the whole repository.
 
 - Backend:
   - `app.py`: FastAPI app, endpoint layer, logging setup, colormap loading, tile rendering.
-  - `weather_data.py`: catalog refresh/discovery, OGD fetches, field/value/wind-vector caches, unit normalization, time-operator and de-aggregation logic.
+  - `weather_models.py`: constants, `OGD_PARAMETER_INFO`, exception classes (`OGDIngestionError` etc.), and frozen dataclasses (`VariableMeta`, `DatasetMeta`).
+  - `weather_cache.py`: standalone (no-`self`) file I/O helpers for field/wind-vector cache files and debug sidecars (`load_cached_field_file`, `save_cached_field_file`, `load_field_debug_info`, `save_field_debug_info`, `safe_unlink`, `parse_iso_duration_hours`, `init_to_iso`, …).
+  - `weather_grib.py`: standalone GRIB/OGD decoding helpers (`decode_param_candidates`, `pick_best_array`, `ogd_variable_candidates`, `horizon_candidates`, `reduce_members`, `member_axis`, `fill_nan_with_neighbors`, `ensure_eccodes_definition_path`, `field_end_step`, `deaggregate_from_reference`).
+  - `weather_data.py`: `ForecastStore` class — catalog refresh/discovery, OGD fetches, field/value/wind-vector caches, unit normalisation, time-operator and de-aggregation logic.  Imports and re-exports symbols from the three sub-modules above so existing callers need no changes.
 - Frontend:
   - `static/index.html`: layout and static asset version query strings.
-  - `static/main.js`: app state, control wiring, map layer logic, hover/value calls, loading overlay, wind vectors, meteogram orchestration.
-  - `static/styles.css`: control panel + map overlays (summary, legend, centered loading status).
+  - `static/main.js`: app state, control wiring, map layer logic, hover/value calls, loading overlay, wind vectors, meteogram orchestration.  Organised with `// ─── Section: XXX ───` headers.
+  - `static/styles.css`: control panel + map overlays (summary, legend, centred loading status).
+  - `static/js/escape.js`: `escapeHtml(str)` utility.
+  - `static/js/search.js`: pure SwissTopo search helpers — `firstSwissTopoResult()`, `normalizeSwissTopoLabel()`.
+  - `static/js/url_state.js`: URL state parsing — `parseUrlState()`.
+  - `static/js/wind_vectors.js`: wind-arrow GeoJSON builder — `buildWindVectorFeatures(vectors, map)`.
+  - `static/js/full_meteogram.js`: full-meteogram constants and pure utility functions (abort/sleep helpers, chart scale/tick formatters, warmup key).
+  - `static/js/animation.js`: placeholder module (animation logic remains in `main.js` Animation section; candidate for future factory-pattern extraction).
+  - `static/js/map_layer.js`: placeholder module (tile-layer logic remains in `main.js` Map Layer section; candidate for future factory-pattern extraction).
+  - `static/js/formatting.js`, `static/js/time_operator.js`, `static/js/ui_text.js`, `static/js/meteogram.js`, `static/js/api.js`: pre-existing focused modules.
 - Tests:
   - `tests/test_weather_data.py`
   - `tests/test_api_endpoints.py`

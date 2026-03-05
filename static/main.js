@@ -5,15 +5,31 @@ let SERIES_TYPES = ["control", "p10", "p90"];
 import { formatInit, validTimeFromInitAndLead, formatSwissLocal, formatLegendValue } from "/js/formatting.js";
 import { filterLeadsForTimeOperator } from "/js/time_operator.js";
 import { selectedOptionText } from "/js/ui_text.js";
-
-function escapeHtml(str) {
-  return String(str)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
-}
+import { escapeHtml } from "/js/escape.js";
+import { firstSwissTopoResult, normalizeSwissTopoLabel } from "/js/search.js";
+import { parseUrlState } from "/js/url_state.js";
+import { buildWindVectorFeatures } from "/js/wind_vectors.js";
+import {
+  FULL_METEOGRAM_VARIABLES,
+  FULL_METEOGRAM_WARMUP_TYPES,
+  FULL_METEOGRAM_WARMUP_POLL_MS,
+  FULL_METEOGRAM_WARMUP_TIMEOUT_MS,
+  FULL_METEOGRAM_WARMUP_STATUS_TIMEOUT_MS,
+  FULL_METEOGRAM_WARMUP_MAX_TRANSIENT_ERRORS,
+  FULL_METEOGRAM_CANVAS_WIDTH,
+  FULL_METEOGRAM_PANEL_HEIGHT,
+  FULL_METEOGRAM_TOP_PAD,
+  FULL_METEOGRAM_BOTTOM_PAD,
+  FULL_METEOGRAM_PLOT_HEIGHT,
+  FULL_METEOGRAM_MEMO_TTL_MS,
+  createAbortError,
+  sleepWithSignal,
+  warmupFlightKey,
+  chooseTickIndicesLocal,
+  fullMeteogramScaleForVariable,
+  niceUpperBound,
+  formatFullMeteogramTick,
+} from "/js/full_meteogram.js";
 
 const state = {
   metadata: null,
@@ -85,19 +101,7 @@ const els = {
 
 let map = null;
 let fullMeteogramWindow = null;
-const FULL_METEOGRAM_VARIABLES = ["clct", "tot_prec", "vmax_10m", "t_2m"];
 const fullMeteogramSeriesMemo = new Map();
-const FULL_METEOGRAM_MEMO_TTL_MS = 10 * 60 * 1000;
-const FULL_METEOGRAM_WARMUP_TYPES = "control,median,p10,p90,min,max";
-const FULL_METEOGRAM_WARMUP_POLL_MS = 1000;
-const FULL_METEOGRAM_WARMUP_TIMEOUT_MS = 20 * 60 * 1000;
-const FULL_METEOGRAM_WARMUP_STATUS_TIMEOUT_MS = 120 * 1000;
-const FULL_METEOGRAM_WARMUP_MAX_TRANSIENT_ERRORS = 12;
-const FULL_METEOGRAM_CANVAS_WIDTH = 700;
-const FULL_METEOGRAM_PANEL_HEIGHT = 172;
-const FULL_METEOGRAM_TOP_PAD = 130;
-const FULL_METEOGRAM_BOTTOM_PAD = 64;
-const FULL_METEOGRAM_PLOT_HEIGHT = 132;
 const FULL_METEOGRAM_POPUP_WIDTH = 800;
 const FULL_METEOGRAM_POPUP_HEIGHT = 1020;
 const MODEL_ELEVATION_MEMO_TTL_MS = 20 * 60 * 1000;
@@ -745,6 +749,11 @@ function bindMapOverlayControls() {
   }
 }
 
+// ─── Section: Search ───────────────────────────────────────────────────────
+// SwissTopo location search.  firstSwissTopoResult() and
+// normalizeSwissTopoLabel() are pure helpers imported from
+// static/js/search.js.
+
 async function loadSwissTopoSuggestions(query) {
   if (!els.mapSearchSuggestions) {
     return;
@@ -799,49 +808,7 @@ function hideSearchSuggestions() {
   els.mapSearchSuggestions.innerHTML = "";
 }
 
-function firstSwissTopoResult(payload) {
-  const results = Array.isArray(payload?.results) ? payload.results : [];
-  for (const item of results) {
-    const attrs = item?.attrs || {};
-    const labelRaw = String(attrs.label || attrs.detail || attrs.origin || "");
-    const label = normalizeSwissTopoLabel(labelRaw);
-    const easting = Number(attrs.y);
-    const northing = Number(attrs.x);
-    // SearchServer with sr=4326 commonly returns lat/lon directly.
-    const lat = Number(attrs.lat);
-    const lon = Number(attrs.lon);
-    if (Number.isFinite(lat) && Number.isFinite(lon)) {
-      return {
-        lat,
-        lon,
-        label: label || `${lat.toFixed(4)}, ${lon.toFixed(4)}`,
-        easting: Number.isFinite(easting) ? easting : null,
-        northing: Number.isFinite(northing) ? northing : null,
-      };
-    }
-    // Fallback: bbox center if direct attrs are unavailable.
-    const bbox = String(attrs.geom_st_box2d || "");
-    const m = bbox.match(/BOX\(([-0-9.]+)\s+([-0-9.]+),([-0-9.]+)\s+([-0-9.]+)\)/i);
-    if (m) {
-      const minLon = Number(m[1]);
-      const minLat = Number(m[2]);
-      const maxLon = Number(m[3]);
-      const maxLat = Number(m[4]);
-      if ([minLon, minLat, maxLon, maxLat].every(Number.isFinite)) {
-        const centerLat = (minLat + maxLat) * 0.5;
-        const centerLon = (minLon + maxLon) * 0.5;
-        return {
-          lat: centerLat,
-          lon: centerLon,
-          label: label || `${centerLat.toFixed(4)}, ${centerLon.toFixed(4)}`,
-          easting: Number.isFinite(easting) ? easting : null,
-          northing: Number.isFinite(northing) ? northing : null,
-        };
-      }
-    }
-  }
-  return null;
-}
+
 
 async function setPinnedPointFromSelection(lat, lon, meta = {}) {
   state.pinnedPoint = { lat: Number(lat), lon: Number(lon) };
@@ -921,13 +888,7 @@ async function resolvePinnedPointElevations(meta = {}) {
   updatePinnedPointText();
 }
 
-function normalizeSwissTopoLabel(labelRaw) {
-  const clean = String(labelRaw || "").replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
-  if (!clean) {
-    return "";
-  }
-  return clean.replace(/\s+\(([A-Z]{2})\)\s*$/g, "").trim();
-}
+
 
 async function fetchModelElevation(datasetId, lat, lon) {
   if (!datasetId || !Number.isFinite(lat) || !Number.isFinite(lon)) {
@@ -1216,6 +1177,10 @@ function renderRefreshStatus() {
   els.catalogInfo.textContent = "Catalog up to date";
 }
 
+// ─── Section: Map Layer ────────────────────────────────────────────────────
+// Weather tile layer management, tile retry/loading state, hover value, and
+// field debug probing.  See static/js/map_layer.js for the placeholder module.
+
 function anyDatasetRefreshing() {
   if (!state.metadata || !state.metadata.datasets) {
     return false;
@@ -1402,6 +1367,10 @@ function onMapSourceData(event) {
   }
 }
 
+// ─── Section: Wind Vectors ─────────────────────────────────────────────────
+// Wind vector overlay management.  buildWindVectorFeatures(vectors, map) is
+// defined in static/js/wind_vectors.js and imported above.
+
 function shouldShowWindVectors() {
   return state.variableId === "wind_speed_10m";
 }
@@ -1507,52 +1476,7 @@ function windRequestKey() {
   ].join("|");
 }
 
-function buildWindVectorFeatures(vectors) {
-  const features = [];
-  for (const vec of vectors) {
-    const speed = Number(vec.speed);
-    const u = Number(vec.u);
-    const v = Number(vec.v);
-    if (!Number.isFinite(speed) || !Number.isFinite(u) || !Number.isFinite(v)) {
-      continue;
-    }
-    const p0 = map.project([vec.lon, vec.lat]);
-    const lenPx = Math.max(7, Math.min(24, 6 + speed * 0.07));
-    const theta = Math.atan2(v, u);
-    const dx = Math.cos(theta) * lenPx;
-    const dy = -Math.sin(theta) * lenPx;
-    const p1 = { x: p0.x + dx, y: p0.y + dy };
-    const headLen = Math.max(3, lenPx * 0.35);
-    const left = {
-      x: p1.x + headLen * Math.cos(theta + Math.PI - 0.45),
-      y: p1.y - headLen * Math.sin(theta + Math.PI - 0.45),
-    };
-    const right = {
-      x: p1.x + headLen * Math.cos(theta + Math.PI + 0.45),
-      y: p1.y - headLen * Math.sin(theta + Math.PI + 0.45),
-    };
-    const ll0 = map.unproject([p0.x, p0.y]);
-    const ll1 = map.unproject([p1.x, p1.y]);
-    const lll = map.unproject([left.x, left.y]);
-    const llr = map.unproject([right.x, right.y]);
-    features.push({
-      type: "Feature",
-      properties: { speed },
-      geometry: { type: "LineString", coordinates: [[ll0.lng, ll0.lat], [ll1.lng, ll1.lat]] },
-    });
-    features.push({
-      type: "Feature",
-      properties: { speed },
-      geometry: { type: "LineString", coordinates: [[ll1.lng, ll1.lat], [lll.lng, lll.lat]] },
-    });
-    features.push({
-      type: "Feature",
-      properties: { speed },
-      geometry: { type: "LineString", coordinates: [[ll1.lng, ll1.lat], [llr.lng, llr.lat]] },
-    });
-  }
-  return features;
-}
+
 
 async function updateWindVectors() {
   if (!map || typeof map.getBounds !== "function") {
@@ -1604,7 +1528,7 @@ async function updateWindVectors() {
     if (!source || typeof source.setData !== "function") {
       return;
     }
-    const features = buildWindVectorFeatures(payload?.vectors || []);
+    const features = buildWindVectorFeatures(payload?.vectors || [], map);
     source.setData({ type: "FeatureCollection", features });
     if (features.length === 0 && Date.now() < windVectorWarmupUntil && shouldShowWindVectors()) {
       scheduleWindVectorUpdate(500);
@@ -1860,6 +1784,9 @@ async function loadFieldDebugInfo(requestVersion) {
     }
   }
 }
+
+// ─── Section: Animation ────────────────────────────────────────────────────
+// Playback controls.  See static/js/animation.js for the placeholder module.
 
 function animationIntervalMs() {
   const raw = Number(els.speedSelect.value);
@@ -2158,6 +2085,11 @@ function fullMeteogramPanelsForCurrentDataset() {
   return FULL_METEOGRAM_VARIABLES.filter((id) => available.has(id));
 }
 
+// ─── Section: Full Meteogram ───────────────────────────────────────────────
+// Full-screen meteogram popup, warmup/prefetch, window management, and canvas
+// rendering.  Pure constants and utility functions are imported from
+// static/js/full_meteogram.js.
+
 function showMeteogramFlowOverlay() {
   if (!els.meteogramFlowOverlay) {
     return;
@@ -2308,40 +2240,11 @@ async function evaluateCachedMeteogramAvailability(point, panels) {
   };
 }
 
-function createAbortError(message = "Operation aborted") {
-  const err = new Error(message);
-  err.name = "AbortError";
-  return err;
-}
 
-function sleepWithSignal(ms, signal) {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(createAbortError());
-      return;
-    }
-    const onAbort = () => {
-      clearTimeout(timer);
-      if (signal) {
-        signal.removeEventListener("abort", onAbort);
-      }
-      reject(createAbortError());
-    };
-    const timer = setTimeout(() => {
-      if (signal) {
-        signal.removeEventListener("abort", onAbort);
-      }
-      resolve();
-    }, ms);
-    if (signal) {
-      signal.addEventListener("abort", onAbort, { once: true });
-    }
-  });
-}
 
-function warmupFlightKey(datasetId, init, panels) {
-  return `${datasetId}|${init}|${panels.join(",")}`;
-}
+
+
+
 
 function attachToWarmupFlight(flight, onProgress, signal) {
   if (signal?.aborted) {
@@ -3259,80 +3162,17 @@ function computeLocalDayBoundaryIndices(leads, leadLabelOffsetHours) {
   return indices;
 }
 
-function chooseTickIndicesLocal(count, maxTicks) {
-  if (count <= 0) return [];
-  if (count <= maxTicks) {
-    return Array.from({ length: count }, (_, i) => i);
-  }
-  const out = [0];
-  const step = (count - 1) / (maxTicks - 1);
-  for (let i = 1; i < maxTicks - 1; i += 1) {
-    out.push(Math.round(i * step));
-  }
-  out.push(count - 1);
-  return Array.from(new Set(out)).sort((a, b) => a - b);
-}
 
-function fullMeteogramScaleForVariable(variableId, minV, maxV) {
-  if (!Number.isFinite(minV) || !Number.isFinite(maxV) || maxV <= minV) {
-    return { min: 0, max: 1 };
-  }
-  if (variableId === "clct") {
-    return { min: 0, max: 100 };
-  }
-  if (variableId === "tot_prec") {
-    const maxNice = niceUpperBound(Math.max(1, maxV * 1.2));
-    return { min: 0, max: maxNice };
-  }
-  if (variableId === "vmax_10m" || variableId === "wind_speed_10m") {
-    const maxNice = niceUpperBound(Math.max(5, maxV * 1.1));
-    return { min: 0, max: maxNice };
-  }
-  const span = maxV - minV;
-  return { min: minV - span * 0.1, max: maxV + span * 0.1 };
-}
 
-function niceUpperBound(value) {
-  const v = Math.max(1e-6, Number(value));
-  const exp = 10 ** Math.floor(Math.log10(v));
-  const r = v / exp;
-  if (r <= 1) return 1 * exp;
-  if (r <= 2) return 2 * exp;
-  if (r <= 5) return 5 * exp;
-  return 10 * exp;
-}
 
-function formatFullMeteogramTick(variableId, v) {
-  const val = Number(v);
-  if (!Number.isFinite(val)) return "-";
-  if (variableId === "clct" || variableId === "vmax_10m" || variableId === "wind_speed_10m") {
-    return String(Math.round(val));
-  }
-  if (variableId === "tot_prec") {
-    return val >= 10 ? val.toFixed(0) : val.toFixed(1);
-  }
-  return Math.abs(val) >= 10 ? val.toFixed(0) : val.toFixed(1);
-}
 
-function parseUrlState() {
-  const p = new URLSearchParams(window.location.search);
-  const parsed = {
-    datasetId: p.get("model") || null,
-    typeId: p.get("stat") || null,
-    timeOperator: p.get("op") || null,
-    variableId: p.get("var") || null,
-    init: p.get("run") || null,
-    lead: p.get("lead") != null ? Number(p.get("lead")) : null,
-    zoom: p.get("z") != null ? Number(p.get("z")) : null,
-    centerLat: p.get("lat") != null ? Number(p.get("lat")) : null,
-    centerLon: p.get("lon") != null ? Number(p.get("lon")) : null,
-    pointLat: p.get("plat") != null ? Number(p.get("plat")) : null,
-    pointLon: p.get("plon") != null ? Number(p.get("plon")) : null,
-    pointLabel: p.get("plabel") || "",
-    speed: p.get("speed") || null,
-  };
-  return parsed;
-}
+
+
+
+
+// ─── Section: URL State ────────────────────────────────────────────────────
+// URL state serialisation/deserialisation.  parseUrlState() is imported from
+// static/js/url_state.js.
 
 function applyUrlState(urlState) {
   if (!urlState || !state.metadata || !state.metadata.datasets) {
