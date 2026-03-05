@@ -33,6 +33,8 @@ FIELD_CACHE_VERSION = "v7"
 MS_TO_KMH = 3.6
 FIELD_CACHE_RETENTION_HOURS = 30
 FIELD_CACHE_CLEANUP_INTERVAL_SECONDS = 300
+FIELD_CACHE_MAX_ENTRIES = int(os.getenv("FIELD_CACHE_MAX_ENTRIES", "2048"))
+GRIB_ASSET_KEY_LOCKS_MAX_ENTRIES = 256
 GRIB_ASSET_CACHE_ENABLED = os.getenv("GRIB_ASSET_CACHE_ENABLED", "1").strip() == "1"
 GRIB_ASSET_CACHE_TTL_HOURS = int(os.getenv("GRIB_ASSET_CACHE_TTL_HOURS", "168"))
 GRIB_ASSET_CACHE_MAX_BYTES = int(os.getenv("GRIB_ASSET_CACHE_MAX_BYTES", str(24 * 1024 * 1024 * 1024)))
@@ -506,9 +508,9 @@ class ForecastStore:
     def stop_background_prewarm(self) -> None:
         with self._prewarm_guard:
             self._prewarm_stop.set()
-        self._background_fetch_executor.shutdown(wait=False, cancel_futures=False)
-        self._grib_download_executor.shutdown(wait=False, cancel_futures=False)
-        self._meteogram_warm_executor.shutdown(wait=False, cancel_futures=False)
+        self._background_fetch_executor.shutdown(wait=False, cancel_futures=True)
+        self._grib_download_executor.shutdown(wait=False, cancel_futures=True)
+        self._meteogram_warm_executor.shutdown(wait=False, cancel_futures=True)
         LOGGER.info("Stopped background workers")
 
     def queue_field_fetch(
@@ -1258,6 +1260,7 @@ class ForecastStore:
                         self._field_cache[key] = loaded
                         if debug_info is not None:
                             self._field_debug_info[key] = debug_info
+                        self._enforce_memory_cache_limit()
                         self._clear_field_failure(key)
                         return loaded
 
@@ -1280,6 +1283,7 @@ class ForecastStore:
                 if debug_info:
                     self._field_debug_info[key] = debug_info
                     self._save_field_debug_info(disk_path, debug_info)
+                self._enforce_memory_cache_limit()
                 self._clear_field_failure(key)
                 return field
             except RuntimeError as exc:
@@ -1565,6 +1569,7 @@ class ForecastStore:
         if loaded is None:
             return None
         self._field_cache[key] = loaded
+        self._enforce_memory_cache_limit()
         return loaded
 
     def get_cached_wind_vectors(
@@ -1596,6 +1601,7 @@ class ForecastStore:
         if loaded is None:
             return None
         self._wind_vector_cache[key] = loaded
+        self._enforce_memory_cache_limit()
         return loaded
 
     def get_wind_vectors(
@@ -1649,6 +1655,7 @@ class ForecastStore:
                     vectors = (np.nansum(u_arr, axis=0).astype(np.float32), np.nansum(v_arr, axis=0).astype(np.float32))
             self._save_cached_wind_vector_file(disk_path, vectors[0], vectors[1])
             self._wind_vector_cache[key] = vectors
+            self._enforce_memory_cache_limit()
             return vectors
 
     def _catalog_for(self, dataset_id: str) -> Dict[str, object]:
@@ -2601,7 +2608,10 @@ class ForecastStore:
             if lock is None:
                 lock = threading.Lock()
                 self._grib_asset_key_locks[key] = lock
-            return lock
+            needs_prune = len(self._grib_asset_key_locks) > GRIB_ASSET_KEY_LOCKS_MAX_ENTRIES
+        if needs_prune:
+            self._prune_grib_asset_key_locks()
+        return lock
 
     def _ensure_grib_asset_cached(self, url_text: str, cache_path: Path) -> Future:
         key = str(cache_path)
@@ -3734,6 +3744,30 @@ class ForecastStore:
             stale = [key for key in self._key_locks.keys() if key not in active_keys]
             for key in stale:
                 self._key_locks.pop(key, None)
+
+    def _enforce_memory_cache_limit(self) -> None:
+        """Evict oldest entries when the in-memory field/wind-vector caches exceed the limit."""
+        excess = len(self._field_cache) - FIELD_CACHE_MAX_ENTRIES
+        if excess > 0:
+            for k in list(self._field_cache)[:excess]:
+                del self._field_cache[k]
+        excess = len(self._wind_vector_cache) - FIELD_CACHE_MAX_ENTRIES
+        if excess > 0:
+            for k in list(self._wind_vector_cache)[:excess]:
+                del self._wind_vector_cache[k]
+
+    def _prune_grib_asset_key_locks(self) -> None:
+        """Prune stale entries from _grib_asset_key_locks when the dict grows too large."""
+        # Acquire futures guard first to maintain consistent lock ordering and avoid
+        # potential deadlocks with threads that hold _grib_download_futures_guard.
+        with self._grib_download_futures_guard:
+            active_keys = set(self._grib_download_futures.keys())
+        with self._grib_asset_key_locks_guard:
+            if len(self._grib_asset_key_locks) <= GRIB_ASSET_KEY_LOCKS_MAX_ENTRIES:
+                return
+            stale = [k for k in self._grib_asset_key_locks if k not in active_keys]
+            for k in stale:
+                self._grib_asset_key_locks.pop(k, None)
 
     def _parse_field_cache_filename(self, filename: str) -> Tuple[str, str, str] | None:
         if not filename.endswith(".npz"):
