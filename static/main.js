@@ -84,6 +84,13 @@ const FULL_METEOGRAM_WARMUP_POLL_MS = 1000;
 const FULL_METEOGRAM_WARMUP_TIMEOUT_MS = 20 * 60 * 1000;
 const FULL_METEOGRAM_WARMUP_STATUS_TIMEOUT_MS = 120 * 1000;
 const FULL_METEOGRAM_WARMUP_MAX_TRANSIENT_ERRORS = 12;
+const FULL_METEOGRAM_CANVAS_WIDTH = 700;
+const FULL_METEOGRAM_PANEL_HEIGHT = 172;
+const FULL_METEOGRAM_TOP_PAD = 130;
+const FULL_METEOGRAM_BOTTOM_PAD = 64;
+const FULL_METEOGRAM_PLOT_HEIGHT = 132;
+const FULL_METEOGRAM_POPUP_WIDTH = 800;
+const FULL_METEOGRAM_POPUP_HEIGHT = 1020;
 const MODEL_ELEVATION_MEMO_TTL_MS = 20 * 60 * 1000;
 const MODEL_ELEVATION_FAILURE_COOLDOWN_MS = 10 * 60 * 1000;
 const modelElevationMemo = new Map();
@@ -180,6 +187,49 @@ const layerVisibility = {
 let searchSuggestTimer = null;
 let meteogramFlowContext = null;
 let meteogramFlowBusy = false;
+let meteogramFlowWarmupAbortController = null;
+const meteogramWarmupFlights = new Map();
+let currentViewToken = "boot";
+let weatherLayerUiState = "idle"; // idle | loading | ready | unavailable
+let weatherLayerUiReason = "";
+const UI_TRACE = new URLSearchParams(window.location.search).get("trace_ui") === "1";
+
+function computeCurrentViewToken() {
+  const datasetId = state.datasetId || "-";
+  const typeId = state.typeId || "control";
+  const timeOperator = state.timeOperator || "none";
+  const variableId = state.variableId || "-";
+  const init = state.init || "-";
+  const lead = Number.isFinite(state.lead) ? String(state.lead) : "-";
+  return `${datasetId}|${typeId}|${timeOperator}|${variableId}|${init}|${lead}|v${tileRequestVersion}`;
+}
+
+function refreshCurrentViewToken() {
+  currentViewToken = computeCurrentViewToken();
+}
+
+window.__iconForecastRequestContext = () => ({
+  viewToken: currentViewToken,
+});
+window.__iconForecastDebug = {
+  getCurrentViewToken: () => currentViewToken,
+  getTileRequestVersion: () => tileRequestVersion,
+  getWeatherLayerUiState: () => weatherLayerUiState,
+  getWeatherLayerUiReason: () => weatherLayerUiReason,
+};
+
+function uiTrace(event, extra = {}) {
+  if (!UI_TRACE) {
+    return;
+  }
+  console.debug("[ui-trace]", event, {
+    token: currentViewToken,
+    tileRequestVersion,
+    weatherLayerUiState,
+    weatherLayerUiReason,
+    ...extra,
+  });
+}
 
 function sortedVariables(dataset) {
   const vars = Array.isArray(dataset?.variables) ? [...dataset.variables] : [];
@@ -229,6 +279,7 @@ async function bootstrap() {
     scheduleWindVectorUpdate();
   });
   map.on("idle", () => {
+    reconcileWeatherLayerOnIdle();
     if (shouldShowWindVectors()) {
       scheduleWindVectorUpdate(0);
     }
@@ -802,7 +853,7 @@ function nearestModelGridPoint(datasetId, lat, lon) {
   const ds = state.metadata?.datasets?.find((d) => d.dataset_id === datasetId);
   const width = Number(ds?.target_grid_width);
   const height = Number(ds?.target_grid_height);
-  const bounds = state.metadata?.bounds || null;
+  const bounds = ds?.bounds || state.metadata?.bounds || null;
   if (!Number.isFinite(width) || !Number.isFinite(height) || !bounds) {
     return null;
   }
@@ -1173,13 +1224,33 @@ function isMapStyleReady() {
   return typeof map.loaded === "function" ? map.loaded() : false;
 }
 
+function reconcileWeatherLayerOnIdle() {
+  if (!map || fieldUnavailable) {
+    return;
+  }
+  const source = map.getSource("weather-source");
+  if (!source) {
+    return;
+  }
+  if (weatherSourceLoading || loadingOverlayPending || els.tileFetchStatus?.textContent) {
+    uiTrace("idle_reconcile_ready");
+  }
+  weatherSourceLoading = false;
+  tileRetryBackoffMs = 500;
+  clearTileRetry();
+  clearFieldDebugProbe();
+  setTileLoadingVisible(false);
+}
+
 function weatherTileUrl() {
   const nonce = tileUrlNonce;
   return `/api/tiles/${encodeURIComponent(state.datasetId)}/${encodeURIComponent(
     state.variableId
   )}/${encodeURIComponent(state.init)}/${state.lead}/{z}/{x}/{y}.png?type_id=${encodeURIComponent(
     state.typeId || "control"
-  )}&time_operator=${encodeURIComponent(state.timeOperator || "none")}&_r=${nonce}`;
+  )}&time_operator=${encodeURIComponent(state.timeOperator || "none")}&_r=${nonce}&_vt=${encodeURIComponent(
+    currentViewToken
+  )}`;
 }
 
 function addOrReplaceWeatherLayer({ forceRecreateSource = false } = {}) {
@@ -1212,6 +1283,8 @@ function addOrReplaceWeatherLayer({ forceRecreateSource = false } = {}) {
       map.removeSource(sourceId);
     }
     setTileLoadingVisible(false);
+    weatherLayerUiState = "idle";
+    weatherLayerUiReason = "";
     if (els.fieldDebugInfo) {
       els.fieldDebugInfo.textContent = "";
     }
@@ -1220,6 +1293,8 @@ function addOrReplaceWeatherLayer({ forceRecreateSource = false } = {}) {
   }
 
   tileRequestVersion += 1;
+  refreshCurrentViewToken();
+  uiTrace("view_cycle_start", { forceRecreateSource });
   fieldUnavailable = false;
   if (forceRecreateSource) {
     tileUrlNonce += 1;
@@ -1288,6 +1363,7 @@ function addOrReplaceWeatherLayer({ forceRecreateSource = false } = {}) {
 
 function onMapDataLoading(event) {
   if (event.sourceId === "weather-source") {
+    uiTrace("map_dataloading", { sourceDataType: event.sourceDataType || "", isSourceLoaded: event.isSourceLoaded || false });
     weatherSourceLoading = true;
     setTileLoadingVisible(true);
   }
@@ -1298,6 +1374,7 @@ function onMapSourceData(event) {
     return;
   }
   if (event.isSourceLoaded) {
+    uiTrace("map_sourcedata_loaded");
     weatherSourceLoading = false;
     fieldUnavailable = false;
     tileRetryBackoffMs = 500;
@@ -1308,6 +1385,7 @@ function onMapSourceData(event) {
     refreshHoverValueIfNeeded();
     scheduleWindVectorUpdate();
   } else {
+    uiTrace("map_sourcedata_loading");
     weatherSourceLoading = true;
     if (!fieldUnavailable) {
       setTileLoadingVisible(true);
@@ -1488,6 +1566,7 @@ async function updateWindVectors() {
 
   const bounds = map.getBounds();
   const requestVersion = ++windVectorRequestVersion;
+  const requestToken = currentViewToken;
   if (windVectorAbortController) {
     windVectorAbortController.abort();
   }
@@ -1499,9 +1578,13 @@ async function updateWindVectors() {
   )}&time_operator=${encodeURIComponent(state.timeOperator || "none")}&init=${encodeURIComponent(
     state.init
   )}&lead=${state.lead}&min_lat=${bounds.getSouth()}&max_lat=${bounds.getNorth()}&min_lon=${bounds.getWest()}&max_lon=${bounds.getEast()}&zoom=${map.getZoom()}`;
+  const urlWithToken = `${url}&_vt=${encodeURIComponent(requestToken)}`;
   try {
-    const payload = await fetchJson(url, { signal: windVectorAbortController.signal, timeoutMs: 12000 });
+    const payload = await fetchJson(urlWithToken, { signal: windVectorAbortController.signal, timeoutMs: 12000 });
     if (requestVersion !== windVectorRequestVersion) {
+      return;
+    }
+    if (requestToken !== currentViewToken) {
       return;
     }
     if (payload?.status === "loading") {
@@ -1546,16 +1629,23 @@ async function requestHoverValue(lat, lon) {
     abortController.abort();
   }
   abortController = new AbortController();
+  const requestToken = currentViewToken;
   try {
     const url = `/api/value?dataset_id=${encodeURIComponent(state.datasetId)}&type_id=${encodeURIComponent(
       state.typeId || "control"
     )}&variable_id=${encodeURIComponent(state.variableId)}&init=${encodeURIComponent(
       state.init
     )}&lead=${state.lead}&time_operator=${encodeURIComponent(state.timeOperator || "none")}&lat=${lat}&lon=${lon}`;
-    const data = await fetchJson(url, { signal: abortController.signal });
+    const data = await fetchJson(`${url}&_vt=${encodeURIComponent(requestToken)}`, { signal: abortController.signal });
+    if (requestToken !== currentViewToken) {
+      return;
+    }
     const text = `${data.value.toFixed(2)} ${unitForVariable(state.variableId)}`;
     tooltip.textContent = text;
   } catch (err) {
+    if (requestToken !== currentViewToken) {
+      return;
+    }
     if (err.name !== "AbortError") {
       tooltip.textContent = err.message && err.message.includes("503") ? "Loading..." : "No value";
     }
@@ -1585,25 +1675,36 @@ function setTileLoadingVisible(visible) {
     loadingOverlayTimer = null;
   }
   if (visible) {
+    uiTrace("tile_status_loading");
+    weatherLayerUiState = "loading";
+    weatherLayerUiReason = "";
     loadingOverlayPending = true;
     const delayMs = state.isAnimating ? LOADING_OVERLAY_DELAY_ANIM_MS : LOADING_OVERLAY_DELAY_MS;
     loadingOverlayTimer = setTimeout(() => {
       loadingOverlayTimer = null;
-      if (!loadingOverlayPending || fieldUnavailable) {
+      if (!loadingOverlayPending || fieldUnavailable || weatherLayerUiState !== "loading") {
         return;
       }
       els.tileFetchStatus.textContent = "Loading...";
       els.tileFetchStatus.classList.add("loading");
     }, delayMs);
   } else {
+    uiTrace("tile_status_ready");
     loadingOverlayPending = false;
+    if (weatherLayerUiState !== "unavailable") {
+      weatherLayerUiState = "ready";
+      weatherLayerUiReason = "";
+    }
     els.tileFetchStatus.textContent = "";
     els.tileFetchStatus.classList.remove("loading");
   }
 }
 
 function setTileUnavailable(reason = "Tiles unavailable") {
+  uiTrace("tile_status_unavailable", { reason });
   fieldUnavailable = true;
+  weatherLayerUiState = "unavailable";
+  weatherLayerUiReason = String(reason || "Tiles unavailable");
   weatherSourceLoading = false;
   loadingOverlayPending = false;
   if (loadingOverlayTimer) {
@@ -1612,7 +1713,7 @@ function setTileUnavailable(reason = "Tiles unavailable") {
   }
   clearTileRetry();
   clearFieldDebugProbe();
-  els.tileFetchStatus.textContent = reason;
+  els.tileFetchStatus.textContent = weatherLayerUiReason;
   els.tileFetchStatus.classList.add("loading");
 }
 
@@ -1696,16 +1797,20 @@ async function loadFieldDebugInfo(requestVersion) {
     els.fieldDebugInfo.textContent = "";
     return;
   }
+  const requestToken = currentViewToken;
   try {
     const payload = await fetchJson(
       `/api/field-debug?dataset_id=${encodeURIComponent(datasetId)}&type_id=${encodeURIComponent(
         typeId
       )}&variable_id=${encodeURIComponent(variableId)}&init=${encodeURIComponent(init)}&lead=${lead}&time_operator=${encodeURIComponent(
         state.timeOperator || "none"
-      )}`,
+      )}&_vt=${encodeURIComponent(requestToken)}`,
       { timeoutMs: 4000 }
     );
     if (requestVersion !== tileRequestVersion) {
+      return;
+    }
+    if (requestToken !== currentViewToken) {
       return;
     }
     if (payload?.status === "loading" || !payload?.debug) {
@@ -1732,6 +1837,9 @@ async function loadFieldDebugInfo(requestVersion) {
     els.fieldDebugInfo.textContent = `Source: ${preview}${suffix}`;
   } catch (_err) {
     if (requestVersion !== tileRequestVersion) {
+      return;
+    }
+    if (requestToken !== currentViewToken) {
       return;
     }
     const msg = String(_err?.message || "");
@@ -1945,6 +2053,7 @@ async function loadSeriesForPinnedPoint() {
   }
   const { lat, lon } = state.pinnedPoint;
   const requestId = ++state.seriesRequestId;
+  const requestToken = currentViewToken;
   updatePinnedPointText("Loading...");
   const typeParam = SERIES_TYPES.join(",");
   const baseUrl = `/api/series?dataset_id=${encodeURIComponent(
@@ -1955,8 +2064,11 @@ async function loadSeriesForPinnedPoint() {
     typeParam
   )}&time_operator=${encodeURIComponent(state.timeOperator || "none")}`;
   try {
-    const cachedData = await fetchJson(`${baseUrl}&cached_only=true`, { timeoutMs: 10000 });
+    const cachedData = await fetchJson(`${baseUrl}&cached_only=true&_vt=${encodeURIComponent(requestToken)}`, { timeoutMs: 10000 });
     if (requestId !== state.seriesRequestId) {
+      return;
+    }
+    if (requestToken !== currentViewToken) {
       return;
     }
     state.seriesData = cachedData;
@@ -1966,8 +2078,11 @@ async function loadSeriesForPinnedPoint() {
 
     if (seriesHasMissingValues(cachedData, SERIES_TYPES)) {
       try {
-        const fullData = await fetchJson(`${baseUrl}&cached_only=false`, { timeoutMs: 60000 });
+        const fullData = await fetchJson(`${baseUrl}&cached_only=false&_vt=${encodeURIComponent(requestToken)}`, { timeoutMs: 60000 });
         if (requestId !== state.seriesRequestId) {
+          return;
+        }
+        if (requestToken !== currentViewToken) {
           return;
         }
         state.seriesData = fullData;
@@ -1976,7 +2091,7 @@ async function loadSeriesForPinnedPoint() {
         renderMeteogram();
       } catch (_err) {
         // Keep cached partial result if full backfill fails.
-        if (requestId === state.seriesRequestId) {
+        if (requestId === state.seriesRequestId && requestToken === currentViewToken) {
           updatePinnedPointText();
           renderMeteogram();
         }
@@ -1984,6 +2099,9 @@ async function loadSeriesForPinnedPoint() {
     }
   } catch (_err) {
     if (requestId !== state.seriesRequestId) {
+      return;
+    }
+    if (requestToken !== currentViewToken) {
       return;
     }
     state.seriesData = null;
@@ -2039,6 +2157,10 @@ function showMeteogramFlowOverlay() {
 }
 
 function hideMeteogramFlowOverlay() {
+  if (meteogramFlowWarmupAbortController) {
+    meteogramFlowWarmupAbortController.abort();
+    meteogramFlowWarmupAbortController = null;
+  }
   meteogramFlowBusy = false;
   if (els.meteogramFlowOverlay) {
     els.meteogramFlowOverlay.hidden = true;
@@ -2079,7 +2201,7 @@ function setMeteogramFlowState({
     els.meteogramFlowOpenBtn.disabled = !openEnabled || meteogramFlowBusy;
   }
   if (els.meteogramFlowCloseBtn) {
-    els.meteogramFlowCloseBtn.disabled = !closeEnabled || meteogramFlowBusy;
+    els.meteogramFlowCloseBtn.disabled = !closeEnabled;
   }
 }
 
@@ -2103,6 +2225,48 @@ function analyzeCachedSeriesAvailability(series) {
     controlAny,
     controlComplete,
     ensembleComplete,
+  };
+}
+
+function warmupStatusDisplay(payload) {
+  const phase = String(payload?.phase || "");
+  if (phase === "prefetch_assets") {
+    const total = Math.max(0, Number(payload?.asset_total || 0));
+    const completed = Math.max(0, Number(payload?.asset_completed || 0));
+    const failed = Math.max(0, Number(payload?.asset_failed || 0));
+    const percent = Number.isFinite(payload?.asset_percent_complete)
+      ? Number(payload.asset_percent_complete)
+      : total > 0
+      ? Math.round((completed / total) * 100)
+      : 0;
+    const detail =
+      total > 0
+        ? `${completed}/${total} GRIB files cached${failed > 0 ? ` (${failed} failed)` : ""}`
+        : "Collecting GRIB assets...";
+    return {
+      title: "Downloading GRIB assets",
+      detail,
+      percent: Math.max(0, Math.min(100, percent)),
+      indeterminate: false,
+    };
+  }
+  const total = Math.max(0, Number(payload?.total_tasks || 0));
+  const completed = Math.max(0, Number(payload?.completed_tasks || 0));
+  const failed = Math.max(0, Number(payload?.failed_tasks || 0));
+  const percent = Number.isFinite(payload?.percent_complete)
+    ? Number(payload.percent_complete)
+    : total > 0
+    ? Math.round((completed / total) * 100)
+    : 0;
+  const detail =
+    total > 0
+      ? `${completed}/${total} fields ready${failed > 0 ? ` (${failed} failed)` : ""}`
+      : "Preparing warmup tasks...";
+  return {
+    title: "Processing fields",
+    detail,
+    percent: Math.max(0, Math.min(100, percent)),
+    indeterminate: false,
   };
 }
 
@@ -2135,31 +2299,113 @@ async function evaluateCachedMeteogramAvailability(point, panels) {
   };
 }
 
-async function runMeteogramWarmup(datasetId, init, panels, onProgress) {
+function createAbortError(message = "Operation aborted") {
+  const err = new Error(message);
+  err.name = "AbortError";
+  return err;
+}
+
+function sleepWithSignal(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(createAbortError());
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      if (signal) {
+        signal.removeEventListener("abort", onAbort);
+      }
+      reject(createAbortError());
+    };
+    const timer = setTimeout(() => {
+      if (signal) {
+        signal.removeEventListener("abort", onAbort);
+      }
+      resolve();
+    }, ms);
+    if (signal) {
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+  });
+}
+
+function warmupFlightKey(datasetId, init, panels) {
+  return `${datasetId}|${init}|${panels.join(",")}`;
+}
+
+function attachToWarmupFlight(flight, onProgress, signal) {
+  if (signal?.aborted) {
+    return Promise.reject(createAbortError());
+  }
+  const listener = typeof onProgress === "function" ? onProgress : null;
+  if (listener) {
+    flight.listeners.add(listener);
+    if (flight.lastPayload || flight.lastTransientErrors > 0) {
+      try {
+        listener(flight.lastPayload, flight.lastTransientErrors);
+      } catch (_err) {
+        // Keep warmup loop robust even if a UI callback fails.
+      }
+    }
+  }
+  const onAbort = () => {
+    if (listener) {
+      flight.listeners.delete(listener);
+    }
+    if (!flight.done && flight.listeners.size === 0) {
+      flight.abortController.abort();
+    }
+  };
+  if (signal) {
+    signal.addEventListener("abort", onAbort, { once: true });
+  }
+  return flight.promise.finally(() => {
+    if (signal) {
+      signal.removeEventListener("abort", onAbort);
+    }
+    if (listener) {
+      flight.listeners.delete(listener);
+    }
+  });
+}
+
+async function runMeteogramWarmup(datasetId, init, panels, onProgress, options = {}) {
+  const signal = options?.signal || null;
+  if (signal?.aborted) {
+    throw createAbortError();
+  }
   const varsParam = encodeURIComponent(panels.join(","));
   const typesParam = encodeURIComponent(FULL_METEOGRAM_WARMUP_TYPES);
   let status = await fetchJson(
     `/api/meteogram-warmup/start?dataset_id=${encodeURIComponent(datasetId)}&init=${encodeURIComponent(
       init
     )}&variables=${varsParam}&types=${typesParam}&time_operator=none`,
-    { timeoutMs: 30000 }
+    { timeoutMs: 30000, signal }
   );
   let transientErrors = 0;
   const startedAt = Date.now();
   while (status && (status.status === "queued" || status.status === "running")) {
+    if (signal?.aborted) {
+      throw createAbortError();
+    }
     if (typeof onProgress === "function") {
       onProgress(status, transientErrors);
     }
     if (Date.now() - startedAt > FULL_METEOGRAM_WARMUP_TIMEOUT_MS) {
       throw new Error("Timed out while warming meteogram cache");
     }
-    await new Promise((resolve) => setTimeout(resolve, FULL_METEOGRAM_WARMUP_POLL_MS));
+    await sleepWithSignal(FULL_METEOGRAM_WARMUP_POLL_MS, signal);
     try {
       status = await fetchJson(`/api/meteogram-warmup/status?job_id=${encodeURIComponent(status.job_id)}`, {
         timeoutMs: FULL_METEOGRAM_WARMUP_STATUS_TIMEOUT_MS,
+        signal,
       });
       transientErrors = 0;
     } catch (err) {
+      if (err?.name === "AbortError") {
+        throw err;
+      }
       transientErrors += 1;
       if (typeof onProgress === "function") {
         onProgress(null, transientErrors);
@@ -2175,18 +2421,114 @@ async function runMeteogramWarmup(datasetId, init, panels, onProgress) {
   return status;
 }
 
-function launchFullMeteogramWindow(options = {}) {
-  fullMeteogramWindow = window.open("", "icon_full_meteogram", "width=1200,height=1700,resizable=yes,scrollbars=yes");
-  if (!fullMeteogramWindow) {
+function runMeteogramWarmupSingleFlight(datasetId, init, panels, onProgress, options = {}) {
+  const key = warmupFlightKey(datasetId, init, panels);
+  const signal = options?.signal || null;
+  const existing = meteogramWarmupFlights.get(key);
+  if (existing) {
+    return attachToWarmupFlight(existing, onProgress, signal);
+  }
+  const abortController = new AbortController();
+  const listeners = new Set();
+  const flight = {
+    key,
+    abortController,
+    listeners,
+    done: false,
+    lastPayload: null,
+    lastTransientErrors: 0,
+    promise: null,
+  };
+  const notify = (payload, transientErrors) => {
+    flight.lastPayload = payload || flight.lastPayload;
+    flight.lastTransientErrors = transientErrors || 0;
+    for (const listener of Array.from(flight.listeners)) {
+      try {
+        listener(payload, transientErrors);
+      } catch (_err) {
+        // Ignore per-listener failures; other listeners should continue.
+      }
+    }
+  };
+  flight.promise = runMeteogramWarmup(datasetId, init, panels, notify, { signal: abortController.signal }).finally(() => {
+    flight.done = true;
+    meteogramWarmupFlights.delete(key);
+    flight.listeners.clear();
+  });
+  meteogramWarmupFlights.set(key, flight);
+  return attachToWarmupFlight(flight, onProgress, signal);
+}
+
+function openFullMeteogramWindowHandle() {
+  const features = `popup=yes,width=${FULL_METEOGRAM_POPUP_WIDTH},height=${FULL_METEOGRAM_POPUP_HEIGHT},resizable=yes,scrollbars=yes`;
+  let win = window.open("about:blank", "icon_full_meteogram", features);
+  if (!win) {
+    return null;
+  }
+  try {
+    // Access may throw if a named popup was reused and navigated cross-origin.
+    void win.document;
+    try {
+      win.resizeTo(FULL_METEOGRAM_POPUP_WIDTH, FULL_METEOGRAM_POPUP_HEIGHT);
+    } catch (_errResize) {
+      // Best effort only.
+    }
+    return win;
+  } catch (_err) {
+    const fallbackName = `icon_full_meteogram_${Date.now()}`;
+    try {
+      win = window.open("about:blank", fallbackName, features);
+      try {
+        win?.resizeTo(FULL_METEOGRAM_POPUP_WIDTH, FULL_METEOGRAM_POPUP_HEIGHT);
+      } catch (_errResize2) {
+        // Best effort only.
+      }
+      return win || null;
+    } catch (_err2) {
+      return null;
+    }
+  }
+}
+
+function renderFullMeteogramError(win, message) {
+  if (!win || win.closed) {
     return;
   }
-  renderFullMeteogramLoading(fullMeteogramWindow);
+  try {
+    win.document.open();
+    win.document.write(
+      "<!doctype html><html><head><meta charset='utf-8'><title>Full Meteogram</title>" +
+        "<style>body{margin:0;padding:16px;background:#e9e9e9;color:#a11;font:13px ui-monospace,SFMono-Regular,Menlo,monospace;}</style>" +
+        `</head><body>${String(message || "Unknown error")}</body></html>`
+    );
+    win.document.close();
+  } catch (_err) {
+    // Best effort only.
+  }
+}
+
+function launchFullMeteogramWindow(options = {}) {
+  fullMeteogramWindow = openFullMeteogramWindowHandle();
+  if (!fullMeteogramWindow) {
+    setMeteogramFlowState({
+      title: "Popup blocked",
+      message: "Unable to open meteogram popup. Allow popups for this site and retry.",
+      percent: 0,
+      downloadEnabled: Boolean(meteogramFlowContext),
+      openEnabled: false,
+      closeEnabled: true,
+    });
+    showMeteogramFlowOverlay();
+    return;
+  }
+  try {
+    renderFullMeteogramLoading(fullMeteogramWindow);
+  } catch (err) {
+    renderFullMeteogramError(fullMeteogramWindow, String(err?.message || err || "Failed to initialize meteogram popup"));
+    return;
+  }
   loadAndRenderFullMeteogram(fullMeteogramWindow, options).catch((err) => {
-    if (fullMeteogramWindow && !fullMeteogramWindow.closed) {
-      fullMeteogramWindow.document.body.innerHTML = `<pre style="padding:16px;color:#a11;font:13px monospace;">${String(
-        err?.message || err
-      )}</pre>`;
-    }
+    renderFullMeteogramError(fullMeteogramWindow, String(err?.message || err || "Failed to render meteogram"));
   });
 }
 
@@ -2219,12 +2561,11 @@ async function openFullMeteogramPopup() {
     percent: null,
     downloadEnabled: false,
     openEnabled: false,
-    closeEnabled: false,
+    closeEnabled: true,
   });
   try {
     const availability = await evaluateCachedMeteogramAvailability(meteogramFlowContext.point, meteogramFlowContext.panels);
     meteogramFlowContext.availability = availability;
-    meteogramFlowBusy = false;
     if (!availability.ctrlAny) {
       setMeteogramFlowState({
         title: "Meteogram data missing",
@@ -2294,7 +2635,7 @@ function renderFullMeteogramLoading(win) {
       "<div id='loadTrack'><div id='loadFill'></div></div>" +
       "<div id='loadPct'>0%</div>" +
       "</div></div>" +
-      "<canvas id='fullMeteogramCanvas' width='920' height='980'></canvas>" +
+      `<canvas id='fullMeteogramCanvas' width='${FULL_METEOGRAM_CANVAS_WIDTH}' height='${FULL_METEOGRAM_TOP_PAD + FULL_METEOGRAM_VARIABLES.length * FULL_METEOGRAM_PANEL_HEIGHT + FULL_METEOGRAM_BOTTOM_PAD}'></canvas>` +
       "</body></html>"
   );
   win.document.close();
@@ -2330,6 +2671,12 @@ function setFullMeteogramLoadingState(win, options = {}) {
 }
 
 async function waitForMeteogramWarmup(win, datasetId, init, panels) {
+  const controller = new AbortController();
+  const windowGuard = setInterval(() => {
+    if (!win || win.closed) {
+      controller.abort();
+    }
+  }, 400);
   setFullMeteogramLoadingState(win, {
     title: "Loading...",
     detail: "Checking cache status...",
@@ -2337,53 +2684,54 @@ async function waitForMeteogramWarmup(win, datasetId, init, panels) {
     indeterminate: true,
   });
   let lastPercent = 0;
-  const status = await runMeteogramWarmup(datasetId, init, panels, (payload, transientErrors) => {
-    if (!win || win.closed) {
-      return;
+  let status = null;
+  try {
+    status = await runMeteogramWarmupSingleFlight(
+      datasetId,
+      init,
+      panels,
+      (payload, transientErrors) => {
+        if (!win || win.closed) {
+          controller.abort();
+          return;
+        }
+        if (!payload) {
+          setFullMeteogramLoadingState(win, {
+            title: "Loading...",
+            detail: `Waiting for status update... retry ${transientErrors}/${FULL_METEOGRAM_WARMUP_MAX_TRANSIENT_ERRORS}`,
+            percent: lastPercent,
+            indeterminate: true,
+          });
+          return;
+        }
+        const progress = warmupStatusDisplay(payload);
+        const clampedPercent = Math.max(lastPercent, Number(progress.percent || 0));
+        lastPercent = clampedPercent;
+        setFullMeteogramLoadingState(win, {
+          title: progress.title || "Loading...",
+          detail: progress.detail || "",
+          percent: clampedPercent,
+          indeterminate: Boolean(progress.indeterminate),
+        });
+      },
+      { signal: controller.signal }
+    );
+  } catch (err) {
+    if (err?.name === "AbortError" && (!win || win.closed)) {
+      return null;
     }
-    if (!payload) {
-      setFullMeteogramLoadingState(win, {
-        title: "Loading...",
-        detail: `Waiting for status update... retry ${transientErrors}/${FULL_METEOGRAM_WARMUP_MAX_TRANSIENT_ERRORS}`,
-        percent: lastPercent,
-        indeterminate: true,
-      });
-      return;
-    }
-    const total = Math.max(0, Number(payload.total_tasks || 0));
-    const completed = Math.max(0, Number(payload.completed_tasks || 0));
-    const failed = Math.max(0, Number(payload.failed_tasks || 0));
-    const percent = Number.isFinite(payload.percent_complete)
-      ? Number(payload.percent_complete)
-      : total > 0
-      ? Math.round((completed / total) * 100)
-      : 0;
-    const clampedPercent = Math.max(lastPercent, Math.max(0, Math.min(100, percent)));
-    lastPercent = clampedPercent;
-    const detail = total > 0 ? `${completed}/${total} fields ready${failed > 0 ? ` (${failed} failed)` : ""}` : "Preparing warmup tasks...";
-    setFullMeteogramLoadingState(win, {
-      title: "Loading...",
-      detail,
-      percent: clampedPercent,
-      indeterminate: false,
-    });
-  });
+    throw err;
+  } finally {
+    clearInterval(windowGuard);
+  }
   if (status) {
-    const total = Math.max(0, Number(status.total_tasks || 0));
-    const completed = Math.max(0, Number(status.completed_tasks || 0));
-    const failed = Math.max(0, Number(status.failed_tasks || 0));
-    const percent = Number.isFinite(status.percent_complete) ? Number(status.percent_complete) : total > 0 ? 100 : 0;
-    const detail =
-      status.status === "partial"
-        ? `${completed}/${total} fields ready (${failed} failed)`
-        : total > 0
-        ? `${completed}/${total} fields ready`
-        : "Cache already warm";
+    const progress = warmupStatusDisplay(status);
+    const detail = String(progress.detail || "Cache already warm");
     setFullMeteogramLoadingState(win, {
-      title: "Loading...",
+      title: String(progress.title || "Loading..."),
       detail,
-      percent: Math.max(0, Math.min(100, percent)),
-      indeterminate: false,
+      percent: Math.max(0, Math.min(100, Number(progress.percent || 0))),
+      indeterminate: Boolean(progress.indeterminate),
     });
   }
   return status;
@@ -2393,6 +2741,8 @@ async function startMeteogramDownloadFlow() {
   if (!meteogramFlowContext || meteogramFlowBusy) {
     return;
   }
+  const controller = new AbortController();
+  meteogramFlowWarmupAbortController = controller;
   meteogramFlowBusy = true;
   setMeteogramFlowState({
     title: "Downloading meteogram data",
@@ -2400,14 +2750,17 @@ async function startMeteogramDownloadFlow() {
     percent: 0,
     downloadEnabled: false,
     openEnabled: false,
-    closeEnabled: false,
+    closeEnabled: true,
   });
   try {
-    await runMeteogramWarmup(
+    await runMeteogramWarmupSingleFlight(
       meteogramFlowContext.datasetId,
       meteogramFlowContext.init,
       meteogramFlowContext.panels,
       (payload, transientErrors) => {
+        if (controller.signal.aborted) {
+          return;
+        }
         if (!payload) {
           setMeteogramFlowState({
             title: "Downloading meteogram data",
@@ -2415,33 +2768,29 @@ async function startMeteogramDownloadFlow() {
             percent: null,
             downloadEnabled: false,
             openEnabled: false,
-            closeEnabled: false,
+            closeEnabled: true,
           });
           return;
         }
-        const total = Math.max(0, Number(payload.total_tasks || 0));
-        const completed = Math.max(0, Number(payload.completed_tasks || 0));
-        const failed = Math.max(0, Number(payload.failed_tasks || 0));
-        const percent = Number.isFinite(payload.percent_complete)
-          ? Number(payload.percent_complete)
-          : total > 0
-          ? Math.round((completed / total) * 100)
-          : 0;
-        const message =
-          total > 0
-            ? `${completed}/${total} fields ready${failed > 0 ? ` (${failed} failed)` : ""}`
-            : "Preparing warmup tasks...";
+        const progress = warmupStatusDisplay(payload);
         setMeteogramFlowState({
-          title: "Downloading meteogram data",
-          message,
-          percent,
+          title: String(progress.title || "Downloading meteogram data"),
+          message: String(progress.detail || "Preparing warmup tasks..."),
+          percent: Number(progress.percent || 0),
           downloadEnabled: false,
           openEnabled: false,
-          closeEnabled: false,
+          closeEnabled: true,
         });
-      }
+      },
+      { signal: controller.signal }
     );
+    if (controller.signal.aborted) {
+      return;
+    }
     const availability = await evaluateCachedMeteogramAvailability(meteogramFlowContext.point, meteogramFlowContext.panels);
+    if (controller.signal.aborted) {
+      return;
+    }
     meteogramFlowContext.availability = availability;
     meteogramFlowBusy = false;
     if (!availability.ctrlAny) {
@@ -2458,28 +2807,26 @@ async function startMeteogramDownloadFlow() {
     if (availability.ctrlComplete && availability.ensembleComplete) {
       setMeteogramFlowState({
         title: "Meteogram ready",
-        message: "Download complete. Opening full meteogram...",
+        message: "Download complete. Click Open meteogram.",
         percent: 100,
         downloadEnabled: false,
-        openEnabled: false,
-        closeEnabled: false,
+        openEnabled: true,
+        closeEnabled: true,
       });
-      hideMeteogramFlowOverlay();
-      launchFullMeteogramWindow({ skipWarmup: true });
       return;
     }
     setMeteogramFlowState({
       title: "Partial meteogram ready",
-      message: "CTRL is available; some ensemble values are still missing. Opening partial meteogram...",
+      message: "CTRL is available; some ensemble values are still missing. Click Open meteogram to view available data.",
       percent: 100,
       downloadEnabled: true,
-      openEnabled: false,
+      openEnabled: true,
       closeEnabled: true,
     });
-    hideMeteogramFlowOverlay();
-    launchFullMeteogramWindow({ skipWarmup: true });
   } catch (err) {
-    meteogramFlowBusy = false;
+    if (err?.name === "AbortError") {
+      return;
+    }
     setMeteogramFlowState({
       title: "Download failed",
       message: String(err?.message || err || "Failed to download meteogram data"),
@@ -2488,6 +2835,11 @@ async function startMeteogramDownloadFlow() {
       openEnabled: false,
       closeEnabled: true,
     });
+  } finally {
+    meteogramFlowBusy = false;
+    if (meteogramFlowWarmupAbortController === controller) {
+      meteogramFlowWarmupAbortController = null;
+    }
   }
 }
 
@@ -2570,10 +2922,10 @@ function renderFullMeteogramWindow(win, dataset, point, panelData) {
   if (!win || win.closed) {
     return;
   }
-  const width = 920;
-  const panelH = 258;
-  const topPad = 182;
-  const botPad = 72;
+  const width = FULL_METEOGRAM_CANVAS_WIDTH;
+  const panelH = FULL_METEOGRAM_PANEL_HEIGHT;
+  const topPad = FULL_METEOGRAM_TOP_PAD;
+  const botPad = FULL_METEOGRAM_BOTTOM_PAD;
   const canvasH = topPad + panelData.length * panelH + botPad;
   const canvas = win.document.getElementById("fullMeteogramCanvas");
   if (!canvas) {
@@ -2624,7 +2976,7 @@ function renderFullMeteogramWindow(win, dataset, point, panelData) {
       x0: left + 6,
       y0: top,
       width: right - left - 12,
-      height: panelH - 62,
+      height: FULL_METEOGRAM_PLOT_HEIGHT,
       variableId: panelData[i].variableId,
       variable: variableMeta(panelData[i].variableId),
       payload: panelData[i].series,

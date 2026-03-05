@@ -9,6 +9,7 @@ import re
 import threading
 import sys
 import time
+import math
 from urllib.parse import urlparse
 import zipfile
 from dataclasses import dataclass
@@ -28,7 +29,7 @@ SWISS_BOUNDS = {
 
 STAC_SEARCH_URL = "https://data.geo.admin.ch/api/stac/v1/search"
 CATALOG_REFRESH_SECONDS = 300
-FIELD_CACHE_VERSION = "v6"
+FIELD_CACHE_VERSION = "v7"
 MS_TO_KMH = 3.6
 FIELD_CACHE_RETENTION_HOURS = 30
 FIELD_CACHE_CLEANUP_INTERVAL_SECONDS = 300
@@ -38,6 +39,7 @@ GRIB_ASSET_CACHE_MAX_BYTES = int(os.getenv("GRIB_ASSET_CACHE_MAX_BYTES", str(24 
 GRIB_DOWNLOAD_WORKERS = int(os.getenv("GRIB_DOWNLOAD_WORKERS", "24"))
 METEOGRAM_WARM_WORKERS = int(os.getenv("METEOGRAM_WARM_WORKERS", "8"))
 METEOGRAM_WARM_JOB_TTL_SECONDS = int(os.getenv("METEOGRAM_WARM_JOB_TTL_SECONDS", "3600"))
+METEOGRAM_WARM_PREFETCH_ASSETS = os.getenv("METEOGRAM_WARM_PREFETCH_ASSETS", "0").strip() == "1"
 SUPPORTED_FORECAST_TYPES = {"control", "mean", "median", "p10", "p90", "min", "max"}
 TIME_OPERATORS = [
     {"time_operator": "none", "display_name": "None"},
@@ -163,6 +165,7 @@ class DatasetMeta:
     fallback_lead_hours: List[int]
     target_grid_width: int = 540
     target_grid_height: int = 380
+    target_grid_spacing_km: float = 0.0
 
 
 class ForecastStore:
@@ -384,6 +387,7 @@ class ForecastStore:
                 fallback_lead_hours=list(range(0, 49)),
                 target_grid_width=540,
                 target_grid_height=380,
+                target_grid_spacing_km=0.7,
             ),
             "icon-ch2-eps-control": DatasetMeta(
                 dataset_id="icon-ch2-eps-control",
@@ -395,12 +399,17 @@ class ForecastStore:
                 fallback_lead_hours=list(range(0, 121)),
                 target_grid_width=270,
                 target_grid_height=190,
+                target_grid_spacing_km=1.4,
             ),
         }
 
         self._grid_width = 540
         self._grid_height = 380
-        self._grid_bounds = dict(SWISS_BOUNDS)
+        self._grid_bounds: Dict[str, Dict[str, float]] = {
+            dataset_id: dict(SWISS_BOUNDS) for dataset_id in self._dataset_configs
+        }
+        self._grid_bounds_locked: Dict[str, bool] = {dataset_id: False for dataset_id in self._dataset_configs}
+        self._computed_target_shapes: Dict[str, Tuple[int, int]] = {}
         self._grid_bounds_guard = threading.Lock()
 
         self._cache_dir = Path("cache")
@@ -693,6 +702,17 @@ class ForecastStore:
                 return
             job["status"] = "running"
             job["started_at"] = datetime.now(timezone.utc).isoformat()
+            job["phase"] = "prefetch_assets" if METEOGRAM_WARM_PREFETCH_ASSETS else "fetch_fields"
+            job["asset_total"] = 0
+            job["asset_completed"] = 0
+            job["asset_failed"] = 0
+        if METEOGRAM_WARM_PREFETCH_ASSETS:
+            self._prefetch_meteogram_assets(job_id, tasks)
+        with self._meteogram_warm_guard:
+            job = self._meteogram_warm_jobs.get(job_id)
+            if job is None:
+                return
+            job["phase"] = "fetch_fields"
         worker_count = max(1, min(int(METEOGRAM_WARM_WORKERS), len(tasks)))
         with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="meteogram-warm-field") as executor:
             futures = [
@@ -729,12 +749,167 @@ class ForecastStore:
                 return
             failed = int(job.get("failed_tasks", 0))
             job["status"] = "done" if failed == 0 else "partial"
+            job["phase"] = "done"
             job["finished_at"] = datetime.now(timezone.utc).isoformat()
+
+    def _prefetch_meteogram_assets(
+        self,
+        job_id: str,
+        tasks: List[Tuple[str, str, str, int, str, str]],
+    ) -> None:
+        urls = self._collect_meteogram_prefetch_urls(tasks)
+        if not urls:
+            return
+        # De-duplicate by local cache target path (signed query strings can differ).
+        unique: Dict[str, str] = {}
+        for url in urls:
+            path = self._grib_asset_path_for_url(str(url))
+            unique.setdefault(str(path), str(url))
+        urls_dedup = list(unique.values())
+        with self._meteogram_warm_guard:
+            job = self._meteogram_warm_jobs.get(job_id)
+            if job is None:
+                return
+            job["asset_total"] = int(len(urls_dedup))
+            job["asset_completed"] = 0
+            job["asset_failed"] = 0
+        futures: List[Future] = []
+        for url in urls_dedup:
+            cache_path = self._grib_asset_path_for_url(str(url))
+            futures.append(self._ensure_grib_asset_cached(str(url), cache_path))
+        for fut in as_completed(futures):
+            err = None
+            try:
+                fut.result()
+            except Exception as exc:
+                err = str(exc)
+            with self._meteogram_warm_guard:
+                job = self._meteogram_warm_jobs.get(job_id)
+                if job is None:
+                    return
+                job["asset_completed"] = int(job.get("asset_completed", 0)) + 1
+                if err:
+                    job["asset_failed"] = int(job.get("asset_failed", 0)) + 1
+                    errors = job.setdefault("errors", [])
+                    if isinstance(errors, list) and len(errors) < 15:
+                        errors.append(f"asset prefetch failed: {err}")
+
+    def _collect_meteogram_prefetch_urls(
+        self, tasks: List[Tuple[str, str, str, int, str, str]]
+    ) -> List[str]:
+        if not tasks:
+            return []
+
+        class _Req:
+            __slots__ = ("need_control", "need_perturbed", "need_prev")
+
+            def __init__(self) -> None:
+                self.need_control = False
+                self.need_perturbed = False
+                self.need_prev = False
+
+        requirements: Dict[Tuple[str, str, str, int, str], _Req] = {}
+        ensemble_types = {"mean", "median", "p10", "p90", "min", "max"}
+        for dataset_id, variable_id, init_str, lead_hour, type_id, time_operator in tasks:
+            key = (dataset_id, variable_id, init_str, int(lead_hour), str(time_operator))
+            req = requirements.get(key)
+            if req is None:
+                req = _Req()
+                requirements[key] = req
+            req.need_control = True
+            if str(type_id) in ensemble_types:
+                req.need_perturbed = True
+            if int(lead_hour) > 0 and (
+                variable_id in DEAGGREGATE_FALLBACK_ACCUM_VARIABLE_IDS
+                or variable_id in DEAGGREGATE_FALLBACK_AVG_VARIABLE_IDS
+            ):
+                req.need_prev = True
+
+        out_urls: List[str] = []
+        out_seen: set[str] = set()
+
+        for (dataset_id, variable_id, init_str, lead_hour, _time_operator), req in requirements.items():
+            cfg = self._dataset_config(dataset_id)
+            variable = self._variables.get(variable_id)
+            if variable is None:
+                continue
+            reference_iso = datetime.strptime(init_str, "%Y%m%d%H").replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
+            ogd_api = self._ogd_api(dataset_id, init_str)
+
+            ogd_variables: List[str] = []
+            if variable.ogd_components:
+                ogd_variables.extend([str(v) for v in variable.ogd_components if str(v).strip()])
+            elif variable.ogd_variable:
+                ogd_variables.append(str(variable.ogd_variable))
+            if not ogd_variables:
+                continue
+
+            leads = [int(lead_hour)]
+            if req.need_prev:
+                previous = self._previous_available_lead(dataset_id, init_str, int(lead_hour))
+                if previous is not None:
+                    leads.append(int(previous))
+            # Stable ordering for determinism.
+            leads = sorted(set(leads))
+
+            for src_lead in leads:
+                for ogd_var in ogd_variables:
+                    if req.need_control:
+                        for u in self._resolve_asset_urls_for_prefetch(
+                            ogd_api=ogd_api,
+                            ogd_collection=cfg.ogd_collection,
+                            ogd_variable=ogd_var,
+                            reference_iso=reference_iso,
+                            lead_hour=src_lead,
+                            perturbed=False,
+                        ):
+                            if u not in out_seen:
+                                out_seen.add(u)
+                                out_urls.append(u)
+                    if req.need_perturbed:
+                        for u in self._resolve_asset_urls_for_prefetch(
+                            ogd_api=ogd_api,
+                            ogd_collection=cfg.ogd_collection,
+                            ogd_variable=ogd_var,
+                            reference_iso=reference_iso,
+                            lead_hour=src_lead,
+                            perturbed=True,
+                        ):
+                            if u not in out_seen:
+                                out_seen.add(u)
+                                out_urls.append(u)
+        return out_urls
+
+    def _resolve_asset_urls_for_prefetch(
+        self,
+        ogd_api,
+        ogd_collection: str,
+        ogd_variable: str,
+        reference_iso: str,
+        lead_hour: int,
+        perturbed: bool,
+    ) -> List[str]:
+        for effective_lead in self._horizon_candidates(int(lead_hour)):
+            for candidate_variable in self._ogd_variable_candidates(ogd_variable):
+                request = ogd_api.Request(
+                    collection=ogd_collection,
+                    variable=candidate_variable,
+                    reference_datetime=reference_iso,
+                    perturbed=bool(perturbed),
+                    horizon=timedelta(hours=int(effective_lead)),
+                )
+                urls = self._safe_asset_urls_for_request(ogd_api, request)
+                if urls:
+                    return urls
+        return []
 
     def _meteogram_warm_payload(self, job: Dict[str, object]) -> Dict[str, object]:
         total = max(0, int(job.get("total_tasks", 0)))
         completed = max(0, int(job.get("completed_tasks", 0)))
         failed = max(0, int(job.get("failed_tasks", 0)))
+        asset_total = max(0, int(job.get("asset_total", 0)))
+        asset_completed = max(0, int(job.get("asset_completed", 0)))
+        asset_failed = max(0, int(job.get("asset_failed", 0)))
         percent = 100 if total == 0 else int(round((completed / float(total)) * 100))
         payload = {
             "job_id": str(job.get("job_id", "")),
@@ -755,6 +930,13 @@ class ForecastStore:
             "ready": total > 0 and completed >= total and failed == 0,
             "partial": total > 0 and completed >= total and failed > 0,
             "errors": list(job.get("errors", [])),
+            "phase": str(job.get("phase", "queued")),
+            "asset_total": asset_total,
+            "asset_completed": asset_completed,
+            "asset_failed": asset_failed,
+            "asset_percent_complete": (
+                0 if asset_total == 0 else max(0, min(100, int(round((asset_completed / float(asset_total)) * 100))))
+            ),
         }
         return payload
 
@@ -1281,7 +1463,7 @@ class ForecastStore:
         field = self.get_field(
             dataset_id, variable_id, init_str, lead_hour, type_id=type_id, time_operator=time_operator
         )
-        bounds = self.grid_bounds()
+        bounds = self.grid_bounds(dataset_id)
         lon_span = max(1e-9, float(bounds["max_lon"] - bounds["min_lon"]))
         lat_span = max(1e-9, float(bounds["max_lat"] - bounds["min_lat"]))
 
@@ -1309,7 +1491,7 @@ class ForecastStore:
         )
         if field is None:
             return None
-        bounds = self.grid_bounds()
+        bounds = self.grid_bounds(dataset_id)
         lon_span = max(1e-9, float(bounds["max_lon"] - bounds["min_lon"]))
         lat_span = max(1e-9, float(bounds["max_lat"] - bounds["min_lat"]))
 
@@ -1324,7 +1506,7 @@ class ForecastStore:
     def get_model_elevation(self, dataset_id: str, lat: float, lon: float) -> float:
         self._dataset_config(dataset_id)
         field = self._get_constant_field(dataset_id, "hsurf")
-        bounds = self.grid_bounds()
+        bounds = self.grid_bounds(dataset_id)
         lon_span = max(1e-9, float(bounds["max_lon"] - bounds["min_lon"]))
         lat_span = max(1e-9, float(bounds["max_lat"] - bounds["min_lat"]))
         lon_frac = (float(lon) - float(bounds["min_lon"])) / lon_span
@@ -1334,9 +1516,19 @@ class ForecastStore:
         y = int(np.clip(round(lat_frac * (h - 1)), 0, h - 1))
         return float(field[y, x])
 
-    def grid_bounds(self) -> Dict[str, float]:
+    def grid_bounds(self, dataset_id: str | None = None) -> Dict[str, float]:
+        if dataset_id is None:
+            # Preserve legacy behavior for callers that do not pass dataset_id.
+            dataset_id = next(iter(self._dataset_configs.keys()))
+        self._dataset_config(dataset_id)
         with self._grid_bounds_guard:
-            return dict(self._grid_bounds)
+            bounds = self._grid_bounds.get(dataset_id)
+            if isinstance(bounds, dict):
+                return dict(bounds)
+        return dict(SWISS_BOUNDS)
+
+    def target_grid_shape(self, dataset_id: str) -> Tuple[int, int]:
+        return self._target_grid_shape(dataset_id)
 
     def get_cached_field(
         self,
@@ -3086,8 +3278,8 @@ class ForecastStore:
         flat_lat = flat_lat[finite]
         flat_lon = flat_lon[finite]
 
-        self._expand_grid_bounds(flat_lat, flat_lon)
-        bounds = self.grid_bounds()
+        self._lock_grid_bounds(dataset_id, flat_lat, flat_lon)
+        bounds = self.grid_bounds(dataset_id)
         grid_width, grid_height = self._target_grid_shape(dataset_id)
         lat_edges = np.linspace(bounds["min_lat"], bounds["max_lat"], grid_height + 1)
         lon_edges = np.linspace(bounds["min_lon"], bounds["max_lon"], grid_width + 1)
@@ -3104,9 +3296,35 @@ class ForecastStore:
 
     def _target_grid_shape(self, dataset_id: str) -> Tuple[int, int]:
         cfg = self._dataset_config(dataset_id)
-        return int(cfg.target_grid_width), int(cfg.target_grid_height)
+        spacing_km = float(getattr(cfg, "target_grid_spacing_km", 0.0) or 0.0)
+        if spacing_km <= 0.0:
+            return int(cfg.target_grid_width), int(cfg.target_grid_height)
 
-    def _expand_grid_bounds(self, lat: np.ndarray, lon: np.ndarray) -> None:
+        with self._grid_bounds_guard:
+            cached = self._computed_target_shapes.get(dataset_id)
+            if cached is not None:
+                return cached
+            bounds = dict(self._grid_bounds.get(dataset_id, SWISS_BOUNDS))
+
+        min_lat = float(bounds["min_lat"])
+        max_lat = float(bounds["max_lat"])
+        min_lon = float(bounds["min_lon"])
+        max_lon = float(bounds["max_lon"])
+        lat_span = max(1e-9, max_lat - min_lat)
+        lon_span = max(1e-9, max_lon - min_lon)
+        mid_lat_rad = math.radians((min_lat + max_lat) * 0.5)
+        km_per_deg_lat = 111.32
+        km_per_deg_lon = 111.32 * max(0.2, math.cos(mid_lat_rad))
+        width_km = lon_span * km_per_deg_lon
+        height_km = lat_span * km_per_deg_lat
+        width = int(max(64, min(4096, round(width_km / spacing_km))))
+        height = int(max(64, min(4096, round(height_km / spacing_km))))
+        shape = (width, height)
+        with self._grid_bounds_guard:
+            self._computed_target_shapes[dataset_id] = shape
+        return shape
+
+    def _lock_grid_bounds(self, dataset_id: str, lat: np.ndarray, lon: np.ndarray) -> None:
         if lat.size == 0 or lon.size == 0:
             return
         lat_min = float(np.nanmin(lat))
@@ -3116,10 +3334,16 @@ class ForecastStore:
         if not (np.isfinite(lat_min) and np.isfinite(lat_max) and np.isfinite(lon_min) and np.isfinite(lon_max)):
             return
         with self._grid_bounds_guard:
-            self._grid_bounds["min_lat"] = float(min(self._grid_bounds["min_lat"], lat_min))
-            self._grid_bounds["max_lat"] = float(max(self._grid_bounds["max_lat"], lat_max))
-            self._grid_bounds["min_lon"] = float(min(self._grid_bounds["min_lon"], lon_min))
-            self._grid_bounds["max_lon"] = float(max(self._grid_bounds["max_lon"], lon_max))
+            if self._grid_bounds_locked.get(dataset_id, False):
+                return
+            self._grid_bounds[dataset_id] = {
+                "min_lat": lat_min,
+                "max_lat": lat_max,
+                "min_lon": lon_min,
+                "max_lon": lon_max,
+            }
+            self._grid_bounds_locked[dataset_id] = True
+            self._computed_target_shapes.pop(dataset_id, None)
 
     @staticmethod
     def _extract_lat_lon(data_array, value_shape: Tuple[int, ...]) -> Tuple[np.ndarray, np.ndarray]:

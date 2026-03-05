@@ -3,6 +3,26 @@ export async function fetchJson(url, options = {}) {
   let timeoutId = null;
   let didTimeout = false;
 
+  const shouldAttachContext = (() => {
+    try {
+      const u = new URL(String(url), window.location.href);
+      return u.origin === window.location.origin && u.pathname.startsWith("/api/");
+    } catch (_err) {
+      return false;
+    }
+  })();
+  if (shouldAttachContext && typeof window.__iconForecastRequestContext === "function") {
+    const ctx = window.__iconForecastRequestContext() || {};
+    const headers = new Headers(fetchOptions.headers || {});
+    if (ctx.viewToken) {
+      headers.set("x-view-token", String(ctx.viewToken));
+    }
+    if (ctx.requestId) {
+      headers.set("x-request-id", String(ctx.requestId));
+    }
+    fetchOptions.headers = headers;
+  }
+
   if (timeoutMs != null) {
     const timeoutController = new AbortController();
     const externalSignal = fetchOptions.signal;

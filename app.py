@@ -13,7 +13,7 @@ from typing import Dict, List
 from datetime import datetime, timedelta, timezone
 
 import numpy as np
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
@@ -82,6 +82,58 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _request_view_token(request: Request) -> str:
+    header_token = str(request.headers.get("x-view-token", "")).strip()
+    if header_token:
+        return header_token
+    query_token = str(request.query_params.get("_vt", "")).strip()
+    if query_token:
+        return query_token
+    return "-"
+
+
+@app.middleware("http")
+async def _api_trace_middleware(request: Request, call_next):
+    path = request.url.path
+    if not path.startswith("/api/"):
+        return await call_next(request)
+
+    start = time.perf_counter()
+    view_token = _request_view_token(request)
+    status_code = 500
+    try:
+        response = await call_next(request)
+        status_code = int(getattr(response, "status_code", 500))
+        return response
+    finally:
+        elapsed_ms = (time.perf_counter() - start) * 1000.0
+        # Keep high-volume tile traces at DEBUG while surfacing slow/failing API calls.
+        if path.startswith("/api/tiles/"):
+            LOGGER.debug(
+                "API trace path=%s status=%s ms=%.1f vt=%s",
+                path,
+                status_code,
+                elapsed_ms,
+                view_token,
+            )
+        elif status_code >= 400 or elapsed_ms >= 2000:
+            LOGGER.info(
+                "API trace path=%s status=%s ms=%.1f vt=%s",
+                path,
+                status_code,
+                elapsed_ms,
+                view_token,
+            )
+        else:
+            LOGGER.debug(
+                "API trace path=%s status=%s ms=%.1f vt=%s",
+                path,
+                status_code,
+                elapsed_ms,
+                view_token,
+            )
 
 store = ForecastStore()
 COLORMAP_REGISTRY = {}
@@ -160,6 +212,11 @@ def metadata() -> Dict[str, object]:
     store.refresh_catalog(force=False, blocking=False)
     datasets_payload = []
     for ds in store.dataset_metas:
+        ds_bounds = _effective_grid_bounds(ds.dataset_id)
+        ds_shape = _dataset_grid_shape(ds.dataset_id) or (
+            int(getattr(ds, "target_grid_width", 0) or 0),
+            int(getattr(ds, "target_grid_height", 0) or 0),
+        )
         init_times = store.init_times(ds.dataset_id)
         init_to_leads = store.init_to_leads(ds.dataset_id)
         expected_init_to_leads = {
@@ -197,8 +254,9 @@ def metadata() -> Dict[str, object]:
             {
                 "dataset_id": ds.dataset_id,
                 "display_name": ds.display_name,
-                "target_grid_width": int(ds.target_grid_width),
-                "target_grid_height": int(ds.target_grid_height),
+                "target_grid_width": int(ds_shape[0]),
+                "target_grid_height": int(ds_shape[1]),
+                "bounds": ds_bounds,
                 "types": FORECAST_TYPES,
                 "time_operators": TIME_OPERATORS,
                 "refresh": store.refresh_status(ds.dataset_id),
@@ -212,7 +270,11 @@ def metadata() -> Dict[str, object]:
 
     first = datasets_payload[0] if datasets_payload else {"init_times": [], "lead_hours": [], "init_to_leads": {}}
     LOGGER.debug("Metadata served datasets=%d", len(datasets_payload))
-    bounds = _effective_grid_bounds()
+    bounds = (
+        dict(first.get("bounds", {}))
+        if datasets_payload and isinstance(first.get("bounds"), dict)
+        else dict(SWISS_BOUNDS)
+    )
     return {
         "datasets": datasets_payload,
         "time_operators": TIME_OPERATORS,
@@ -553,7 +615,7 @@ def tiles(
         )
         raise
 
-    rgba = render_tile_rgba(field, z, x, y, variable_id, _effective_grid_bounds())
+    rgba = render_tile_rgba(field, z, x, y, variable_id, _effective_grid_bounds(dataset_id))
     image = Image.fromarray(rgba, mode="RGBA")
     buf = BytesIO()
     image.save(buf, format="PNG", optimize=True)
@@ -598,7 +660,7 @@ def wind_vectors(
 
     z = float(zoom)
     base_stride = int(max(6, min(18, round(18 - z))))
-    bounds = _effective_grid_bounds()
+    bounds = _effective_grid_bounds(dataset_id)
     grid_height, grid_width = int(u_field.shape[0]), int(u_field.shape[1])
     y0 = _lat_to_y(max_lat, grid_height, bounds)
     y1 = _lat_to_y(min_lat, grid_height, bounds)
@@ -788,6 +850,17 @@ def _coord_key(value: float) -> float:
 
 
 def _dataset_grid_shape(dataset_id: str) -> tuple[int, int] | None:
+    target_shape_fn = getattr(store, "target_grid_shape", None)
+    if callable(target_shape_fn):
+        try:
+            shape = target_shape_fn(dataset_id)
+            if isinstance(shape, (tuple, list)) and len(shape) == 2:
+                w = int(shape[0] or 0)
+                h = int(shape[1] or 0)
+                if w > 1 and h > 1:
+                    return (w, h)
+        except Exception:
+            pass
     metas = getattr(store, "dataset_metas", None)
     if not metas:
         return None
@@ -800,11 +873,17 @@ def _dataset_grid_shape(dataset_id: str) -> tuple[int, int] | None:
     return None
 
 
-def _effective_grid_bounds() -> Dict[str, float]:
+def _effective_grid_bounds(dataset_id: str | None = None) -> Dict[str, float]:
     grid_bounds_fn = getattr(store, "grid_bounds", None)
     if callable(grid_bounds_fn):
         try:
-            bounds = grid_bounds_fn()
+            if dataset_id is None:
+                bounds = grid_bounds_fn()
+            else:
+                try:
+                    bounds = grid_bounds_fn(dataset_id)
+                except TypeError:
+                    bounds = grid_bounds_fn()
             if isinstance(bounds, dict):
                 return bounds
         except Exception:
@@ -815,7 +894,7 @@ def _effective_grid_bounds() -> Dict[str, float]:
 def _series_spatial_cache_token(dataset_id: str, lat: float, lon: float) -> tuple:
     # Cache by sampled grid point to preserve value correctness while still
     # allowing reuse across nearby request coordinates that map to the same cell.
-    bounds = _effective_grid_bounds()
+    bounds = _effective_grid_bounds(dataset_id)
     shape = _dataset_grid_shape(dataset_id)
     if shape is None:
         return ("coord", _coord_key(lat), _coord_key(lon))
