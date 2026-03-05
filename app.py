@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from io import BytesIO
 import json
 import logging
@@ -59,7 +60,16 @@ def _configure_logging() -> logging.Logger:
 LOGGER = _configure_logging()
 
 
-app = FastAPI(title="ICON Forecast Explorer")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    LOGGER.info("App startup")
+    store.start_background_prewarm()
+    yield
+    LOGGER.info("App shutdown")
+    store.stop_background_prewarm()
+
+
+app = FastAPI(title="ICON Forecast Explorer", lifespan=lifespan)
 
 
 def _allowed_cors_origins() -> List[str]:
@@ -192,18 +202,6 @@ def _parse_requested_variables(variables: str) -> List[str]:
         if variable_id not in out:
             out.append(variable_id)
     return out
-
-
-@app.on_event("startup")
-def _startup() -> None:
-    LOGGER.info("App startup")
-    store.start_background_prewarm()
-
-
-@app.on_event("shutdown")
-def _shutdown() -> None:
-    LOGGER.info("App shutdown")
-    store.stop_background_prewarm()
 
 
 @app.get("/api/metadata")

@@ -5,3 +5,13 @@ __pycache__/
 cache/
 logs/
 *.log
+profile.out
+.env
+.idea/
+.vscode/
+*.egg-info/
+dist/
+build/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/

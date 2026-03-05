@@ -6,6 +6,15 @@ import { formatInit, validTimeFromInitAndLead, formatSwissLocal, formatLegendVal
 import { filterLeadsForTimeOperator } from "/js/time_operator.js";
 import { selectedOptionText } from "/js/ui_text.js";
 
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
 const state = {
   metadata: null,
   datasetId: null,
@@ -336,7 +345,7 @@ function populateControls(metadata) {
   state.datasetId = datasets[0].dataset_id;
 
   els.dataset.innerHTML = datasets
-    .map((d) => `<option value="${d.dataset_id}">${d.display_name}</option>`)
+    .map((d) => `<option value="${escapeHtml(d.dataset_id)}">${escapeHtml(d.display_name)}</option>`)
     .join("");
 
   const selectedDataset = datasets[0];
@@ -344,12 +353,12 @@ function populateControls(metadata) {
   const selectedTypes = selectedDataset.types || [{ type_id: "control", display_name: "Control" }];
   state.typeId = selectedTypes[0].type_id;
   els.type.innerHTML = selectedTypes
-    .map((t) => `<option value="${t.type_id}">${t.display_name}</option>`)
+    .map((t) => `<option value="${escapeHtml(t.type_id)}">${escapeHtml(t.display_name)}</option>`)
     .join("");
   state.variableId = selectedVariables[0]?.variable_id || null;
   const timeOperators = metadata.time_operators || selectedDataset.time_operators || [{ time_operator: "none", display_name: "None" }];
   els.timeOperator.innerHTML = timeOperators
-    .map((op) => `<option value="${op.time_operator}">${op.display_name}</option>`)
+    .map((op) => `<option value="${escapeHtml(op.time_operator)}">${escapeHtml(op.display_name)}</option>`)
     .join("");
   state.timeOperator = timeOperators[0]?.time_operator || "none";
   els.timeOperator.value = state.timeOperator;
@@ -357,7 +366,7 @@ function populateControls(metadata) {
   state.expectedInitToLeads = selectedDataset.expected_init_to_leads || {};
   state.leadHours = selectedDataset.lead_hours || [];
   els.variable.innerHTML = selectedVariables
-    .map((v) => `<option value="${v.variable_id}">${v.display_name}</option>`)
+    .map((v) => `<option value="${escapeHtml(v.variable_id)}">${escapeHtml(v.display_name)}</option>`)
     .join("");
 
   const initTimes = selectedDataset.init_times || [];
@@ -399,7 +408,7 @@ async function refreshMetadata({ preserveSelection }) {
       const activeVariables = sortedVariables(activeDataset);
       const activeTypes = activeDataset.types || [{ type_id: "control", display_name: "Control" }];
       els.type.innerHTML = activeTypes
-        .map((t) => `<option value="${t.type_id}">${t.display_name}</option>`)
+        .map((t) => `<option value="${escapeHtml(t.type_id)}">${escapeHtml(t.display_name)}</option>`)
         .join("");
       if (activeTypes.some((t) => t.type_id === previous.typeId)) {
         state.typeId = previous.typeId;
@@ -411,7 +420,7 @@ async function refreshMetadata({ preserveSelection }) {
       const timeOperators =
         metadata.time_operators || activeDataset.time_operators || [{ time_operator: "none", display_name: "None" }];
       els.timeOperator.innerHTML = timeOperators
-        .map((op) => `<option value="${op.time_operator}">${op.display_name}</option>`)
+        .map((op) => `<option value="${escapeHtml(op.time_operator)}">${escapeHtml(op.display_name)}</option>`)
         .join("");
       if (timeOperators.some((op) => op.time_operator === previous.timeOperator)) {
         state.timeOperator = previous.timeOperator;
@@ -421,7 +430,7 @@ async function refreshMetadata({ preserveSelection }) {
       els.timeOperator.value = state.timeOperator;
 
       els.variable.innerHTML = activeVariables
-        .map((v) => `<option value="${v.variable_id}">${v.display_name}</option>`)
+        .map((v) => `<option value="${escapeHtml(v.variable_id)}">${escapeHtml(v.display_name)}</option>`)
         .join("");
       state.initToLeads = activeDataset.init_to_leads || {};
       state.expectedInitToLeads = activeDataset.expected_init_to_leads || {};
@@ -481,20 +490,20 @@ function bindEvents() {
     const datasetVariables = sortedVariables(dataset);
     const datasetTypes = dataset.types || [{ type_id: "control", display_name: "Control" }];
     els.type.innerHTML = datasetTypes
-      .map((t) => `<option value="${t.type_id}">${t.display_name}</option>`)
+      .map((t) => `<option value="${escapeHtml(t.type_id)}">${escapeHtml(t.display_name)}</option>`)
       .join("");
     state.typeId = datasetTypes[0].type_id;
     state.initToLeads = dataset.init_to_leads || {};
     state.expectedInitToLeads = dataset.expected_init_to_leads || {};
     state.leadHours = dataset.lead_hours || [];
     els.variable.innerHTML = datasetVariables
-      .map((v) => `<option value="${v.variable_id}">${v.display_name}</option>`)
+      .map((v) => `<option value="${escapeHtml(v.variable_id)}">${escapeHtml(v.display_name)}</option>`)
       .join("");
     state.variableId = datasetVariables[0]?.variable_id || null;
     const timeOperators =
       state.metadata.time_operators || dataset.time_operators || [{ time_operator: "none", display_name: "None" }];
     els.timeOperator.innerHTML = timeOperators
-      .map((op) => `<option value="${op.time_operator}">${op.display_name}</option>`)
+      .map((op) => `<option value="${escapeHtml(op.time_operator)}">${escapeHtml(op.display_name)}</option>`)
       .join("");
     state.timeOperator = timeOperators[0]?.time_operator || "none";
     els.timeOperator.value = state.timeOperator;
@@ -1130,7 +1139,7 @@ function renderInitOptions(dataset, selectedInit) {
     .map((init) => {
       const leads = state.initToLeads[init] || [];
       const suffix = isRunComplete(dataset.dataset_id, init, leads) ? "" : " (incomplete)";
-      return `<option value="${init}">${formatInit(init)}${suffix}</option>`;
+      return `<option value="${escapeHtml(init)}">${escapeHtml(formatInit(init))}${suffix}</option>`;
     })
     .join("");
   if (selectedInit) {
@@ -2499,7 +2508,7 @@ function renderFullMeteogramError(win, message) {
     win.document.write(
       "<!doctype html><html><head><meta charset='utf-8'><title>Full Meteogram</title>" +
         "<style>body{margin:0;padding:16px;background:#e9e9e9;color:#a11;font:13px ui-monospace,SFMono-Regular,Menlo,monospace;}</style>" +
-        `</head><body>${String(message || "Unknown error")}</body></html>`
+        `</head><body>${escapeHtml(String(message || "Unknown error"))}</body></html>`
     );
     win.document.close();
   } catch (_err) {
@@ -3340,7 +3349,7 @@ function applyUrlState(urlState) {
   els.dataset.value = state.datasetId;
 
   const types = ds.types || [{ type_id: "control", display_name: "Control" }];
-  els.type.innerHTML = types.map((t) => `<option value="${t.type_id}">${t.display_name}</option>`).join("");
+  els.type.innerHTML = types.map((t) => `<option value="${escapeHtml(t.type_id)}">${escapeHtml(t.display_name)}</option>`).join("");
   state.typeId =
     (urlState.typeId && types.some((t) => t.type_id === urlState.typeId) && urlState.typeId) ||
     types[0].type_id;
@@ -3348,7 +3357,7 @@ function applyUrlState(urlState) {
 
   const timeOperators = state.metadata.time_operators || ds.time_operators || [{ time_operator: "none", display_name: "None" }];
   els.timeOperator.innerHTML = timeOperators
-    .map((op) => `<option value="${op.time_operator}">${op.display_name}</option>`)
+    .map((op) => `<option value="${escapeHtml(op.time_operator)}">${escapeHtml(op.display_name)}</option>`)
     .join("");
   state.timeOperator =
     (urlState.timeOperator &&
@@ -3359,7 +3368,7 @@ function applyUrlState(urlState) {
 
   const dsVariables = sortedVariables(ds);
   els.variable.innerHTML = dsVariables
-    .map((v) => `<option value="${v.variable_id}">${v.display_name}</option>`)
+    .map((v) => `<option value="${escapeHtml(v.variable_id)}">${escapeHtml(v.display_name)}</option>`)
     .join("");
   state.variableId =
     (urlState.variableId &&

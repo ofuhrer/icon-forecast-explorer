@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Syntax check Python files
+        run: python -m py_compile app.py weather_data.py
+
+      - name: Syntax check JavaScript
+        run: node --check static/main.js
+
+      - name: Run tests
+        run: PYTHONPATH=. python -m unittest discover -s tests -p "test_*.py"
