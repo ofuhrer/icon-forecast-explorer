@@ -21,8 +21,17 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Install dev dependencies
+        run: pip install -r requirements-dev.txt
+
       - name: Syntax check Python files
-        run: python -m py_compile app.py weather_data.py
+        run: python -m py_compile app.py weather_data.py weather_models.py weather_cache.py weather_grib.py tile_rendering.py grid_utils.py series_cache.py input_validation.py
+
+      - name: Lint Python
+        run: ruff check app.py weather_data.py weather_models.py weather_cache.py weather_grib.py tile_rendering.py grid_utils.py series_cache.py input_validation.py
+
+      - name: Check Python formatting
+        run: ruff format --check app.py weather_models.py weather_cache.py weather_grib.py tile_rendering.py grid_utils.py series_cache.py input_validation.py
 
       - name: Syntax check JavaScript
         run: node --check static/main.js

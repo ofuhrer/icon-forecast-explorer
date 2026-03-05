@@ -4,6 +4,7 @@ All functions in this module are stateless (no ``ForecastStore`` dependency) and
 operate only on their explicit arguments.  They are extracted here so they can be
 unit-tested and reused without importing the full ``weather_data`` module.
 """
+
 from __future__ import annotations
 
 import os
@@ -101,8 +102,7 @@ def pick_best_array(result_map: Dict[str, object], requested_variable: str):
 
     available = ", ".join(sorted(str(k) for k in result_map.keys()))
     raise RuntimeError(
-        f"Requested variable {requested_variable} not found in decoded GRIB payload. "
-        f"Available keys: {available}"
+        f"Requested variable {requested_variable} not found in decoded GRIB payload. Available keys: {available}"
     )
 
 
@@ -204,7 +204,14 @@ def reduce_members(members: np.ndarray, type_id: str) -> np.ndarray:
 
 def member_axis(dims: Tuple[str, ...], ndim: int) -> int | None:
     """Return the axis index for the member/ensemble dimension, or ``None``."""
-    candidates = {"eps", "number", "member", "realization", "ensemble_member", "perturbationNumber"}
+    candidates = {
+        "eps",
+        "number",
+        "member",
+        "realization",
+        "ensemble_member",
+        "perturbationNumber",
+    }
     for idx, dim in enumerate(dims):
         if str(dim) in candidates:
             return idx
@@ -230,7 +237,16 @@ def fill_nan_with_neighbors(grid: np.ndarray) -> np.ndarray:
         neighbor_sum = np.zeros_like(result, dtype=np.float64)
         neighbor_count = np.zeros_like(result, dtype=np.int16)
 
-        for dy, dx in [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1)]:
+        for dy, dx in [
+            (-1, 0),
+            (1, 0),
+            (0, -1),
+            (0, 1),
+            (-1, -1),
+            (-1, 1),
+            (1, -1),
+            (1, 1),
+        ]:
             if dy >= 0:
                 src_y = slice(0, result.shape[0] - dy)
                 dst_y = slice(dy, result.shape[0])
@@ -306,7 +322,11 @@ def field_end_step(info: Dict[str, object], fallback_lead_hour: int) -> float:
 
 
 def deaggregate_from_reference(
-    current: np.ndarray, previous: np.ndarray, kind: str, end_step: float, previous_end_step: float
+    current: np.ndarray,
+    previous: np.ndarray,
+    kind: str,
+    end_step: float,
+    previous_end_step: float,
 ) -> np.ndarray:
     """De-aggregate *current* from a reference-time accumulation/average.
 

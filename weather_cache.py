@@ -5,6 +5,7 @@ on the :class:`~weather_data.ForecastStore` instance or any other application
 state.  They are extracted here so they can be unit-tested and reused without
 importing the full ``weather_data`` module.
 """
+
 from __future__ import annotations
 
 import json
@@ -45,7 +46,11 @@ def save_cached_field_file(path: Path, field: np.ndarray) -> None:
     with tmp_path.open("wb") as tmp_file:
         np.savez_compressed(tmp_file, field=field)
     os.replace(tmp_path, path)
-    LOGGER.debug("Saved field cache path=%s bytes=%s", path, path.stat().st_size if path.exists() else -1)
+    LOGGER.debug(
+        "Saved field cache path=%s bytes=%s",
+        path,
+        path.stat().st_size if path.exists() else -1,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -73,7 +78,11 @@ def save_cached_wind_vector_file(path: Path, u_field: np.ndarray, v_field: np.nd
     with tmp_path.open("wb") as tmp_file:
         np.savez_compressed(tmp_file, u=u_field, v=v_field)
     os.replace(tmp_path, path)
-    LOGGER.debug("Saved wind vector cache path=%s bytes=%s", path, path.stat().st_size if path.exists() else -1)
+    LOGGER.debug(
+        "Saved wind vector cache path=%s bytes=%s",
+        path,
+        path.stat().st_size if path.exists() else -1,
+    )
 
 
 # ---------------------------------------------------------------------------
