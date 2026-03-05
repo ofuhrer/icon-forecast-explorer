@@ -69,33 +69,6 @@ LOG_LEVEL=DEBUG uvicorn app:app --reload
 PYTHONPATH=. .venv/bin/python -m unittest discover -s tests -p "test_*.py"
 ```
 
-## STAC GRIB Bandwidth Benchmark
-
-Use this to measure raw STAC asset download throughput independently from decode/regrid overhead.
-
-Sequential benchmark (default):
-
-```bash
-PYTHONPATH=. .venv/bin/python stac_grib_benchmark.py \
-  --dataset-id icon-ch2-eps-control \
-  --init 2026022812 \
-  --max-assets 200
-```
-
-Parallel benchmark (comparison):
-
-```bash
-PYTHONPATH=. .venv/bin/python stac_grib_benchmark.py \
-  --dataset-id icon-ch2-eps-control \
-  --init 2026022812 \
-  --max-assets 200 \
-  --workers 8
-```
-
-Notes:
-- Default mode streams and discards bytes (minimal disk impact).
-- Add `--output-dir /tmp/icon_bench` to save files while benchmarking.
-
 ## Troubleshooting
 
 1. Start with `LOG_LEVEL=DEBUG` and watch server logs.
