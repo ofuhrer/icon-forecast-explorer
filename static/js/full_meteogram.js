@@ -120,6 +120,11 @@ export function warmupFlightKey(datasetId, init, panels) {
  * Return indices in ``leads`` that mark the start of a new calendar day
  * (Europe/Zurich time zone).
  *
+ * This 4-parameter version is exported for testability.  ``main.js`` retains a
+ * 2-parameter wrapper (``computeLocalDayBoundaryIndices(leads, leadLabelOffsetHours)``)
+ * that closes over ``state.init`` and the imported ``validTimeFromInitAndLead``
+ * helper, so this export is **not** imported by ``main.js``.
+ *
  * @param {number[]} leads  Lead hours.
  * @param {number} leadLabelOffsetHours  Display offset added to each lead.
  * @param {string} init  Current forecast init string (``YYYYMMDDhh``).

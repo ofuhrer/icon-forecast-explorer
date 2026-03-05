@@ -2938,14 +2938,14 @@ class ForecastStore:
                     dims.pop(axis)
 
         dims_t = tuple(dims)
-        member_axis = member_axis(dims_t, values.ndim)
-        if member_axis is None:
+        axis_idx = member_axis(dims_t, values.ndim)
+        if axis_idx is None:
             raise RuntimeError(
                 "Failed to identify ensemble member dimension. "
                 f"dims={tuple(getattr(data_array, 'dims', ()))}, shape={values.shape}"
             )
 
-        moved = np.moveaxis(values, member_axis, 0)
+        moved = np.moveaxis(values, axis_idx, 0)
         spatial_shape = moved.shape[1:]
         lat, lon = self._extract_lat_lon(data_array, spatial_shape)
         regridded = [self._regrid_values(moved[idx], lat, lon, dataset_id) for idx in range(moved.shape[0])]

@@ -17,9 +17,8 @@
  *
  * @param {Array<{speed: number, u: number, v: number, lat: number, lon: number}>} vectors
  *   Wind vector data returned by the API.
- * @param {object} mapInstance
- *   Live MapLibre/Mapbox ``Map`` instance used for pixel ↔ coordinate
- *   projection.
+ * @param {import('maplibre-gl').Map} mapInstance
+ *   Live MapLibre GL ``Map`` instance used for pixel ↔ coordinate projection.
  * @returns {Array<object>} GeoJSON Feature objects.
  */
 export function buildWindVectorFeatures(vectors, mapInstance) {
