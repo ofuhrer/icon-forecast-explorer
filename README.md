@@ -24,6 +24,7 @@ LOG_LEVEL=DEBUG uvicorn app:app --reload
 ## Current Features
 
 - Map-based field rendering with in-map summary and compact in-map legend.
+- Basemap menu with SwissTopo, OpenStreetMap, and Carto styles.
 - Delayed centered `Loading...` overlay (to avoid flicker during short loads/animation).
 - Wind vectors overlay for `10 m wind speed`.
 - Meteogram for clicked location (`control`, `p10`, `p90`).
@@ -46,6 +47,9 @@ LOG_LEVEL=DEBUG uvicorn app:app --reload
 - `HOT_PREWARM_ENABLED` (`1` default)
 - `HOT_PREWARM_VARIABLES` (`t_2m,tot_prec` default)
 - `BACKGROUND_FETCH_WORKERS` (`2` default)
+- `GRIB_DOWNLOAD_CONNECT_TIMEOUT_SECONDS` (`6` default)
+- `GRIB_DOWNLOAD_READ_TIMEOUT_SECONDS` (`20` default)
+- `GRIB_DOWNLOAD_WAIT_TIMEOUT_SECONDS` (`25` default)
 
 ## Cache Behavior
 

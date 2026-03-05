@@ -496,6 +496,17 @@ button {
   font-weight: 600;
 }
 
+#layerPanel select {
+  width: 100%;
+  min-width: 210px;
+  border: 1px solid rgba(170, 170, 170, 0.7);
+  border-radius: 6px;
+  padding: 4px 6px;
+  background: #fff;
+  color: #39414b;
+  font-size: 0.76rem;
+}
+
 .sidebar-collapsed #app {
   grid-template-columns: 0 1fr;
 }
