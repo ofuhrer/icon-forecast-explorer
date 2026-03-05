@@ -12,7 +12,6 @@ import time
 import math
 from urllib.parse import urlparse
 import zipfile
-from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -20,154 +19,76 @@ from typing import Dict, List, Tuple
 import numpy as np
 import requests
 
-SWISS_BOUNDS = {
-    "min_lat": 45.75,
-    "max_lat": 47.9,
-    "min_lon": 5.9,
-    "max_lon": 10.7,
-}
-
-STAC_SEARCH_URL = "https://data.geo.admin.ch/api/stac/v1/search"
-CATALOG_REFRESH_SECONDS = 300
-FIELD_CACHE_VERSION = "v7"
-MS_TO_KMH = 3.6
-FIELD_CACHE_RETENTION_HOURS = 30
-FIELD_CACHE_CLEANUP_INTERVAL_SECONDS = 300
-FIELD_CACHE_MAX_ENTRIES = int(os.getenv("FIELD_CACHE_MAX_ENTRIES", "2048"))
-GRIB_ASSET_KEY_LOCKS_MAX_ENTRIES = 256
-GRIB_ASSET_CACHE_ENABLED = os.getenv("GRIB_ASSET_CACHE_ENABLED", "1").strip() == "1"
-GRIB_ASSET_CACHE_TTL_HOURS = int(os.getenv("GRIB_ASSET_CACHE_TTL_HOURS", "168"))
-GRIB_ASSET_CACHE_MAX_BYTES = int(os.getenv("GRIB_ASSET_CACHE_MAX_BYTES", str(24 * 1024 * 1024 * 1024)))
-GRIB_DOWNLOAD_WORKERS = int(os.getenv("GRIB_DOWNLOAD_WORKERS", "24"))
-METEOGRAM_WARM_WORKERS = int(os.getenv("METEOGRAM_WARM_WORKERS", "8"))
-METEOGRAM_WARM_JOB_TTL_SECONDS = int(os.getenv("METEOGRAM_WARM_JOB_TTL_SECONDS", "3600"))
-METEOGRAM_WARM_PREFETCH_ASSETS = os.getenv("METEOGRAM_WARM_PREFETCH_ASSETS", "0").strip() == "1"
-SUPPORTED_FORECAST_TYPES = {"control", "mean", "median", "p10", "p90", "min", "max"}
-TIME_OPERATORS = [
-    {"time_operator": "none", "display_name": "None"},
-    {"time_operator": "avg_3h", "display_name": "Avg 3h"},
-    {"time_operator": "avg_6h", "display_name": "Avg 6h"},
-    {"time_operator": "avg_12h", "display_name": "Avg 12h"},
-    {"time_operator": "avg_24h", "display_name": "Avg 24h"},
-    {"time_operator": "acc_3h", "display_name": "Acc 3h"},
-    {"time_operator": "acc_6h", "display_name": "Acc 6h"},
-    {"time_operator": "acc_12h", "display_name": "Acc 12h"},
-    {"time_operator": "acc_24h", "display_name": "Acc 24h"},
-    {"time_operator": "min_3h", "display_name": "Min 3h"},
-    {"time_operator": "min_6h", "display_name": "Min 6h"},
-    {"time_operator": "min_12h", "display_name": "Min 12h"},
-    {"time_operator": "min_24h", "display_name": "Min 24h"},
-    {"time_operator": "max_3h", "display_name": "Max 3h"},
-    {"time_operator": "max_6h", "display_name": "Max 6h"},
-    {"time_operator": "max_12h", "display_name": "Max 12h"},
-    {"time_operator": "max_24h", "display_name": "Max 24h"},
-]
-SUPPORTED_TIME_OPERATORS = {item["time_operator"] for item in TIME_OPERATORS}
-HOT_PREWARM_INTERVAL_SECONDS = 300
-HOT_PREWARM_VARIABLES = tuple(
-    v.strip()
-    for v in os.getenv("HOT_PREWARM_VARIABLES", "clct,tot_prec,vmax_10m,t_2m").split(",")
-    if v.strip()
+# ---------------------------------------------------------------------------
+# Re-export everything from the focused sub-modules so that existing callers
+# (app.py, tests, etc.) that import from weather_data continue to work.
+# ---------------------------------------------------------------------------
+from weather_models import (  # noqa: F401
+    SWISS_BOUNDS,
+    STAC_SEARCH_URL,
+    CATALOG_REFRESH_SECONDS,
+    FIELD_CACHE_VERSION,
+    MS_TO_KMH,
+    FIELD_CACHE_RETENTION_HOURS,
+    FIELD_CACHE_CLEANUP_INTERVAL_SECONDS,
+    FIELD_CACHE_MAX_ENTRIES,
+    GRIB_ASSET_KEY_LOCKS_MAX_ENTRIES,
+    GRIB_ASSET_CACHE_ENABLED,
+    GRIB_ASSET_CACHE_TTL_HOURS,
+    GRIB_ASSET_CACHE_MAX_BYTES,
+    GRIB_DOWNLOAD_WORKERS,
+    METEOGRAM_WARM_WORKERS,
+    METEOGRAM_WARM_JOB_TTL_SECONDS,
+    METEOGRAM_WARM_PREFETCH_ASSETS,
+    SUPPORTED_FORECAST_TYPES,
+    TIME_OPERATORS,
+    SUPPORTED_TIME_OPERATORS,
+    HOT_PREWARM_INTERVAL_SECONDS,
+    HOT_PREWARM_VARIABLES,
+    HOT_PREWARM_TYPES,
+    HOT_PREWARM_LEADS,
+    HOT_PREWARM_ALL_LEADS,
+    HOT_PREWARM_ENABLED,
+    OGD_FETCH_RETRIES,
+    OGD_FETCH_BASE_BACKOFF_SECONDS,
+    OGD_HORIZON_FALLBACK_STEPS,
+    BACKGROUND_FETCH_WORKERS,
+    FIELD_FAILURE_TTL_SECONDS,
+    DEAGGREGATE_FALLBACK_ACCUM_VARIABLE_IDS,
+    DEAGGREGATE_FALLBACK_AVG_VARIABLE_IDS,
+    OGD_PARAMETER_INFO,
+    OGDIngestionError,
+    OGDRequestError,
+    OGDDecodeError,
+    VariableMeta,
+    DatasetMeta,
 )
-HOT_PREWARM_TYPES = tuple(
-    t.strip()
-    for t in os.getenv("HOT_PREWARM_TYPES", "control,p10,p90").split(",")
-    if t.strip() in SUPPORTED_FORECAST_TYPES
-) or ("control",)
-HOT_PREWARM_LEADS = tuple(
-    int(v.strip())
-    for v in os.getenv("HOT_PREWARM_LEADS", "0,3,6,9,12,15,18,21,24,27,30,33,36,39,42,45,48").split(",")
-    if v.strip().isdigit()
-) or (0, 6, 12)
-HOT_PREWARM_ALL_LEADS = os.getenv("HOT_PREWARM_ALL_LEADS", "1").strip() == "1"
-HOT_PREWARM_ENABLED = os.getenv("HOT_PREWARM_ENABLED", "1").strip() == "1"
-OGD_FETCH_RETRIES = 3
-OGD_FETCH_BASE_BACKOFF_SECONDS = 0.4
-OGD_HORIZON_FALLBACK_STEPS = (0, 1, 2, 3)
-BACKGROUND_FETCH_WORKERS = int(os.getenv("BACKGROUND_FETCH_WORKERS", "2"))
-FIELD_FAILURE_TTL_SECONDS = int(os.getenv("FIELD_FAILURE_TTL_SECONDS", "180"))
-DEAGGREGATE_FALLBACK_ACCUM_VARIABLE_IDS = {
-    "dursun",
-    "rain_gsp",
-    "snow_gsp",
-    "tot_prec",
-}
-DEAGGREGATE_FALLBACK_AVG_VARIABLE_IDS = {
-    "alhfl_s",
-    "ashfl_s",
-    "asob_s",
-    "aswdifd_s",
-    "aswdir_s",
-    "athb_s",
-}
+from weather_cache import (
+    load_cached_field_file,
+    save_cached_field_file,
+    load_cached_wind_vector_file,
+    save_cached_wind_vector_file,
+    load_field_debug_info,
+    save_field_debug_info,
+    field_debug_path,
+    safe_unlink,
+    parse_iso_duration_hours,
+    init_to_iso,
+)
+from weather_grib import (
+    decode_param_candidates,
+    pick_best_array,
+    ogd_variable_candidates,
+    horizon_candidates,
+    reduce_members,
+    member_axis,
+    fill_nan_with_neighbors,
+    ensure_eccodes_definition_path,
+    field_end_step,
+    deaggregate_from_reference,
+)
+
 LOGGER = logging.getLogger("icon_forecast.weather_data")
-
-OGD_PARAMETER_INFO: Dict[str, Dict[str, str]] = {
-    "T_2M": {"long_name": "2 m temperature", "standard_unit": "K"},
-    "TD_2M": {"long_name": "2 m dew point temperature", "standard_unit": "K"},
-    "PS": {"long_name": "Surface pressure", "standard_unit": "Pa"},
-    "U_10M": {"long_name": "U-Component of Wind", "standard_unit": "m/s"},
-    "V_10M": {"long_name": "V-Component of Wind", "standard_unit": "m/s"},
-    "VMAX_10M": {"long_name": "10 m wind gust", "standard_unit": "m/s"},
-    "TOT_PREC": {"long_name": "Total precipitation", "standard_unit": "kg m-2 s-1"},
-    "RAIN_GSP": {"long_name": "Large-scale rain", "standard_unit": "kg m-2 s-1"},
-    "CLCT": {"long_name": "Total cloud cover", "standard_unit": "%"},
-    "CLCL": {"long_name": "Low cloud cover", "standard_unit": "%"},
-    "CLCM": {"long_name": "Mid cloud cover", "standard_unit": "%"},
-    "CLCH": {"long_name": "High cloud cover", "standard_unit": "%"},
-    "CEILING": {"long_name": "Cloud ceiling", "standard_unit": "m"},
-    "HZEROCL": {"long_name": "Freezing level height", "standard_unit": "m"},
-    "W_SNOW": {"long_name": "Snow water equivalent", "standard_unit": "kg m-2"},
-    "SNOW_GSP": {"long_name": "Large-scale snowfall water equivalent", "standard_unit": "kg m-2 s-1"},
-    "SNOWLMT": {"long_name": "Snowfall limit height", "standard_unit": "m"},
-    "DURSUN": {"long_name": "Sunshine duration", "standard_unit": "s"},
-    "ASOB_S": {"long_name": "Net shortwave radiation flux at surface", "standard_unit": "W m-2"},
-    "ATHB_S": {"long_name": "Net longwave radiation flux at surface", "standard_unit": "W m-2"},
-    "ASWDIR_S": {"long_name": "Direct shortwave radiation flux at surface", "standard_unit": "W m-2"},
-    "ASWDIFD_S": {"long_name": "Diffuse shortwave radiation flux at surface", "standard_unit": "W m-2"},
-    "ASHFL_S": {"long_name": "Sensible heat flux at surface", "standard_unit": "W m-2"},
-    "ALHFL_S": {"long_name": "Latent heat flux at surface", "standard_unit": "W m-2"},
-    "CAPE_ML": {"long_name": "CAPE (mixed layer)", "standard_unit": "J/kg"},
-    "CIN_ML": {"long_name": "CIN (mixed layer)", "standard_unit": "J/kg"},
-}
-
-
-class OGDIngestionError(RuntimeError):
-    """Base class for OGD ingestion failures."""
-
-
-class OGDRequestError(OGDIngestionError):
-    """Raised when data retrieval from OGD fails."""
-
-
-class OGDDecodeError(OGDIngestionError):
-    """Raised when a fetched OGD payload cannot be decoded."""
-
-
-@dataclass(frozen=True)
-class VariableMeta:
-    variable_id: str
-    display_name: str
-    unit: str
-    min_value: float
-    max_value: float
-    ogd_variable: str | None = None
-    ogd_components: Tuple[str, ...] = ()
-    lead_time_display_offset_hours: int = 0
-
-
-@dataclass(frozen=True)
-class DatasetMeta:
-    dataset_id: str
-    display_name: str
-    collection_id: str
-    ogd_collection: str
-    expected_members_total: int
-    fallback_cycle_hours: int
-    fallback_lead_hours: List[int]
-    target_grid_width: int = 540
-    target_grid_height: int = 380
-    target_grid_spacing_km: float = 0.0
 
 
 class ForecastStore:
@@ -891,8 +812,8 @@ class ForecastStore:
         lead_hour: int,
         perturbed: bool,
     ) -> List[str]:
-        for effective_lead in self._horizon_candidates(int(lead_hour)):
-            for candidate_variable in self._ogd_variable_candidates(ogd_variable):
+        for effective_lead in horizon_candidates(int(lead_hour)):
+            for candidate_variable in ogd_variable_candidates(ogd_variable):
                 request = ogd_api.Request(
                     collection=ogd_collection,
                     variable=candidate_variable,
@@ -1224,9 +1145,9 @@ class ForecastStore:
                 dataset_id, type_id, variable_id, init_str, lead_hour, time_operator=time_operator
             )
             if disk_path.exists():
-                loaded = self._load_cached_field_file(disk_path)
+                loaded = load_cached_field_file(disk_path)
                 if loaded is not None:
-                    debug_info = self._load_field_debug_info(disk_path)
+                    debug_info = load_field_debug_info(disk_path)
                     if debug_info is None:
                         # Backfill debug sidecars for legacy cache entries so
                         # provenance/source reporting remains consistent.
@@ -1239,7 +1160,7 @@ class ForecastStore:
                             time_operator=time_operator,
                         )
                         if debug_info is not None:
-                            self._save_field_debug_info(disk_path, debug_info)
+                            save_field_debug_info(disk_path, debug_info)
                     # Guard against stale cached "none" fields for variables that
                     # require deaggregation from reference-time products.
                     needs_recompute = False
@@ -1278,11 +1199,11 @@ class ForecastStore:
                         type_id=type_id,
                         time_operator=time_operator,
                     )
-                self._save_cached_field_file(disk_path, field)
+                save_cached_field_file(disk_path, field)
                 self._field_cache[key] = field
                 if debug_info:
                     self._field_debug_info[key] = debug_info
-                    self._save_field_debug_info(disk_path, debug_info)
+                    save_field_debug_info(disk_path, debug_info)
                 self._enforce_memory_cache_limit()
                 self._clear_field_failure(key)
                 return field
@@ -1315,7 +1236,7 @@ class ForecastStore:
         )
         if not disk_path.exists():
             return None
-        info = self._load_field_debug_info(disk_path)
+        info = load_field_debug_info(disk_path)
         if info is None:
             info = self._build_field_debug_info_from_request(
                 dataset_id=dataset_id,
@@ -1327,7 +1248,7 @@ class ForecastStore:
             )
             if info is None:
                 return None
-            self._save_field_debug_info(disk_path, info)
+            save_field_debug_info(disk_path, info)
         self._field_debug_info[key] = info
         return dict(info)
 
@@ -1382,7 +1303,7 @@ class ForecastStore:
 
         cfg = self._dataset_config(dataset_id)
         variable = self.variable_meta(variable_id)
-        reference_iso = self._init_to_iso(init_str)
+        reference_iso = init_to_iso(init_str)
 
         source_files: set[str] = set()
         source_variables: List[str] = []
@@ -1565,7 +1486,7 @@ class ForecastStore:
         )
         if not disk_path.exists():
             return None
-        loaded = self._load_cached_field_file(disk_path)
+        loaded = load_cached_field_file(disk_path)
         if loaded is None:
             return None
         self._field_cache[key] = loaded
@@ -1597,7 +1518,7 @@ class ForecastStore:
         disk_path = self._wind_vector_cache_path(dataset_id, type_id, init_str, lead_hour, time_operator=time_operator)
         if not disk_path.exists():
             return None
-        loaded = self._load_cached_wind_vector_file(disk_path)
+        loaded = load_cached_wind_vector_file(disk_path)
         if loaded is None:
             return None
         self._wind_vector_cache[key] = loaded
@@ -1630,7 +1551,7 @@ class ForecastStore:
                 dataset_id, type_id, init_str, lead_hour, time_operator=time_operator
             )
             if disk_path.exists():
-                loaded = self._load_cached_wind_vector_file(disk_path)
+                loaded = load_cached_wind_vector_file(disk_path)
                 if loaded is not None:
                     self._wind_vector_cache[key] = loaded
                     return loaded
@@ -1653,7 +1574,7 @@ class ForecastStore:
                     vectors = (np.nanmean(u_arr, axis=0).astype(np.float32), np.nanmean(v_arr, axis=0).astype(np.float32))
                 else:
                     vectors = (np.nansum(u_arr, axis=0).astype(np.float32), np.nansum(v_arr, axis=0).astype(np.float32))
-            self._save_cached_wind_vector_file(disk_path, vectors[0], vectors[1])
+            save_cached_wind_vector_file(disk_path, vectors[0], vectors[1])
             self._wind_vector_cache[key] = vectors
             self._enforce_memory_cache_limit()
             return vectors
@@ -1821,19 +1742,19 @@ class ForecastStore:
                 return cached
             disk_path = self._constant_field_cache_path(dataset_id, constant_id)
             if disk_path.exists():
-                loaded = self._load_cached_field_file(disk_path)
+                loaded = load_cached_field_file(disk_path)
                 if loaded is not None:
                     self._constant_fields[key] = loaded
                     return loaded
             field = self._fetch_constant_field(dataset_id, constant_id)
-            self._save_cached_field_file(disk_path, field)
+            save_cached_field_file(disk_path, field)
             self._constant_fields[key] = field
             return field
 
     def _fetch_constant_field(self, dataset_id: str, constant_id: str) -> np.ndarray:
         if constant_id != "hsurf":
             raise ValueError(f"Unknown constant field: {constant_id}")
-        self._ensure_eccodes_definition_path()
+        ensure_eccodes_definition_path()
         try:
             from meteodatalab import ogd_api
         except ImportError as exc:
@@ -1850,7 +1771,7 @@ class ForecastStore:
                     dataset_id=dataset_id,
                     ogd_collection=cfg.ogd_collection,
                     ogd_variable="HSURF",
-                    reference_iso=self._init_to_iso(str(init_times[0])),
+                    reference_iso=init_to_iso(str(init_times[0])),
                     lead_hour=0,
                     perturbed=False,
                 )
@@ -1878,7 +1799,7 @@ class ForecastStore:
             result = ogd_api.grib_decoder.load(source, {"param": "hsurf"}, geo_coords=geo_coords)
         if not result:
             raise OGDDecodeError(f"Failed to decode HSURF from constants asset for dataset={dataset_id}")
-        data_array = self._pick_best_array(result, "HSURF")
+        data_array = pick_best_array(result, "HSURF")
         field = self._regrid_data_array(data_array, dataset_id).astype(np.float32)
         return field
 
@@ -1990,7 +1911,7 @@ class ForecastStore:
         request = ogd_api.Request(
             collection=cfg.ogd_collection,
             variable=self._catalog_reference_ogd_variable,
-            reference_datetime=self._init_to_iso(init_str),
+            reference_datetime=init_to_iso(init_str),
             perturbed=False,
             horizon=timedelta(hours=lead_hour),
         )
@@ -2013,29 +1934,6 @@ class ForecastStore:
         candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
         return candidates[0]
 
-    @staticmethod
-    def _field_debug_path(field_cache_path: Path) -> Path:
-        return field_cache_path.with_suffix(".json")
-
-    def _load_field_debug_info(self, field_cache_path: Path) -> Dict[str, object] | None:
-        path = self._field_debug_path(field_cache_path)
-        if not path.exists():
-            return None
-        try:
-            payload = json.loads(path.read_text())
-        except (OSError, json.JSONDecodeError):
-            return None
-        if not isinstance(payload, dict):
-            return None
-        return payload
-
-    def _save_field_debug_info(self, field_cache_path: Path, debug_info: Dict[str, object]) -> None:
-        path = self._field_debug_path(field_cache_path)
-        try:
-            path.write_text(json.dumps(debug_info))
-        except OSError:
-            LOGGER.warning("Failed to write field debug info path=%s", path)
-            pass
 
     def _record_field_failure(self, key: Tuple[str, ...], message: str) -> None:
         with self._field_failure_guard:
@@ -2070,53 +1968,13 @@ class ForecastStore:
     def _has_recent_field_failure(self, key: Tuple[str, ...]) -> bool:
         return self._recent_field_failure(key) is not None
 
-    @staticmethod
-    def _load_cached_field_file(path: Path) -> np.ndarray | None:
-        try:
-            return np.load(path)["field"]
-        except (EOFError, OSError, zipfile.BadZipFile, KeyError, ValueError):
-            try:
-                path.unlink(missing_ok=True)
-            except OSError:
-                pass
-            LOGGER.warning("Dropped corrupt/incomplete field cache file path=%s", path)
-            return None
-
-    @staticmethod
-    def _save_cached_field_file(path: Path, field: np.ndarray) -> None:
-        tmp_path = path.with_suffix(path.suffix + ".tmp")
-        with tmp_path.open("wb") as tmp_file:
-            np.savez_compressed(tmp_file, field=field)
-        os.replace(tmp_path, path)
-        LOGGER.debug("Saved field cache path=%s bytes=%s", path, path.stat().st_size if path.exists() else -1)
-
-    @staticmethod
-    def _load_cached_wind_vector_file(path: Path) -> Tuple[np.ndarray, np.ndarray] | None:
-        try:
-            payload = np.load(path)
-            return payload["u"], payload["v"]
-        except (EOFError, OSError, zipfile.BadZipFile, KeyError, ValueError):
-            try:
-                path.unlink(missing_ok=True)
-            except OSError:
-                pass
-            LOGGER.warning("Dropped corrupt/incomplete wind vector cache file path=%s", path)
-            return None
-
-    @staticmethod
-    def _save_cached_wind_vector_file(path: Path, u_field: np.ndarray, v_field: np.ndarray) -> None:
-        tmp_path = path.with_suffix(path.suffix + ".tmp")
-        with tmp_path.open("wb") as tmp_file:
-            np.savez_compressed(tmp_file, u=u_field, v=v_field)
-        os.replace(tmp_path, path)
-        LOGGER.debug("Saved wind vector cache path=%s bytes=%s", path, path.stat().st_size if path.exists() else -1)
 
     def _fetch_and_regrid(
         self, dataset_id: str, variable_id: str, init_str: str, lead_hour: int, type_id: str = "control"
     ) -> Tuple[np.ndarray, Dict[str, object]]:
         cfg = self._dataset_config(dataset_id)
         variable = self.variable_meta(variable_id)
-        self._ensure_eccodes_definition_path()
+        ensure_eccodes_definition_path()
         try:
             from meteodatalab import ogd_api
         except ImportError as exc:
@@ -2124,7 +1982,7 @@ class ForecastStore:
                 "meteodata-lab is required for OGD ingestion. Install dependencies from requirements.txt"
             ) from exc
 
-        reference_iso = self._init_to_iso(init_str)
+        reference_iso = init_to_iso(init_str)
         if type_id == "control":
             return self._fetch_control_field(
                 ogd_api, cfg.dataset_id, cfg.ogd_collection, variable_id, variable, init_str, reference_iso, lead_hour
@@ -2146,7 +2004,7 @@ class ForecastStore:
         self, dataset_id: str, init_str: str, lead_hour: int, type_id: str = "control"
     ) -> Tuple[np.ndarray, np.ndarray]:
         cfg = self._dataset_config(dataset_id)
-        self._ensure_eccodes_definition_path()
+        ensure_eccodes_definition_path()
         try:
             from meteodatalab import ogd_api
         except ImportError as exc:
@@ -2154,7 +2012,7 @@ class ForecastStore:
                 "meteodata-lab is required for OGD ingestion. Install dependencies from requirements.txt"
             ) from exc
 
-        reference_iso = self._init_to_iso(init_str)
+        reference_iso = init_to_iso(init_str)
         if type_id == "control":
             u_field, u_units, _u_offset, _u_info = self._fetch_direct_regridded(
                 ogd_api, dataset_id, cfg.ogd_collection, "U_10M", reference_iso, lead_hour
@@ -2194,7 +2052,7 @@ class ForecastStore:
             init=reference_iso,
             lead_hour=lead_hour,
         )
-        return self._reduce_members(u_members, type_id), self._reduce_members(v_members, type_id)
+        return reduce_members(u_members, type_id), reduce_members(v_members, type_id)
 
     def _fetch_control_field(
         self,
@@ -2247,9 +2105,9 @@ class ForecastStore:
                 prev_field, _prev_units, _prev_display_offset, prev_info = self._fetch_direct_regridded(
                     ogd_api, dataset_id, ogd_collection, variable.ogd_variable, reference_iso, previous_lead
                 )
-                prev_end = self._field_end_step(prev_info, previous_lead)
-                end_step = self._field_end_step(info, lead_hour)
-                field = self._deaggregate_from_reference(field, prev_field, deagg_kind, end_step, prev_end)
+                prev_end = field_end_step(prev_info, previous_lead)
+                end_step = field_end_step(info, lead_hour)
+                field = deaggregate_from_reference(field, prev_field, deagg_kind, end_step, prev_end)
                 info["deaggregated"] = True
                 info["deaggregation_kind"] = deagg_kind
                 info["deaggregation_note"] = deagg_note
@@ -2316,7 +2174,7 @@ class ForecastStore:
             ens_speed = np.sqrt(u_ens * u_ens + v_ens * v_ens).astype(np.float32)
             members = np.concatenate([ctrl_speed[np.newaxis, ...], ens_speed], axis=0)
             self._check_ensemble_member_count(dataset_id, expected_members_total, members.shape[0], variable_id, init=reference_iso, lead_hour=lead_hour)
-            return self._reduce_members(members, type_id), {
+            return reduce_members(members, type_id), {
                 "source_files": sorted(
                     set(
                         u_ctrl_info.get("source_files", [])
@@ -2357,10 +2215,10 @@ class ForecastStore:
                 prev_ens, _pens_units, _pens_offset, prev_ens_info = self._fetch_direct_member_stack(
                     ogd_api, dataset_id, ogd_collection, variable.ogd_variable, reference_iso, previous_lead
                 )
-                prev_end = self._field_end_step(prev_ctrl_info, previous_lead)
-                end_step = self._field_end_step(ctrl_info, lead_hour)
-                ctrl = self._deaggregate_from_reference(ctrl, prev_ctrl, deagg_kind, end_step, prev_end)
-                ens = self._deaggregate_from_reference(ens, prev_ens, deagg_kind, end_step, prev_end)
+                prev_end = field_end_step(prev_ctrl_info, previous_lead)
+                end_step = field_end_step(ctrl_info, lead_hour)
+                ctrl = deaggregate_from_reference(ctrl, prev_ctrl, deagg_kind, end_step, prev_end)
+                ens = deaggregate_from_reference(ens, prev_ens, deagg_kind, end_step, prev_end)
                 ctrl_info["deaggregated"] = True
                 ctrl_info["deaggregation_kind"] = deagg_kind
                 ctrl_info["deaggregation_note"] = deagg_note
@@ -2379,7 +2237,7 @@ class ForecastStore:
         self._check_ensemble_member_count(dataset_id, expected_members_total, members.shape[0], variable_id, init=reference_iso, lead_hour=lead_hour)
         ctrl_source_variable = str(ctrl_info.get("source_variable", variable.ogd_variable))
         ens_source_variable = str(ens_info.get("source_variable", variable.ogd_variable))
-        return self._reduce_members(members, type_id), {
+        return reduce_members(members, type_id), {
             "source_files": sorted(set(ctrl_info.get("source_files", []) + ens_info.get("source_files", []))),
             "source_variables": sorted(set([ctrl_source_variable, ens_source_variable])),
             "source_unit": ctrl_units or ens_units,
@@ -2425,8 +2283,8 @@ class ForecastStore:
         requested_lead = int(lead_hour)
         last_exc: Exception | None = None
 
-        for effective_lead in self._horizon_candidates(requested_lead):
-            for candidate_variable in self._ogd_variable_candidates(ogd_variable):
+        for effective_lead in horizon_candidates(requested_lead):
+            for candidate_variable in ogd_variable_candidates(ogd_variable):
                 request = ogd_api.Request(
                     collection=ogd_collection,
                     variable=candidate_variable,
@@ -2486,8 +2344,8 @@ class ForecastStore:
         requested_lead = int(lead_hour)
         last_exc: Exception | None = None
 
-        for effective_lead in self._horizon_candidates(requested_lead):
-            for candidate_variable in self._ogd_variable_candidates(ogd_variable):
+        for effective_lead in horizon_candidates(requested_lead):
+            for candidate_variable in ogd_variable_candidates(ogd_variable):
                 request = ogd_api.Request(
                     collection=ogd_collection,
                     variable=candidate_variable,
@@ -2535,44 +2393,6 @@ class ForecastStore:
             f"after horizon fallbacks {OGD_HORIZON_FALLBACK_STEPS} and {OGD_FETCH_RETRIES} attempts each: {last_exc}"
         ) from last_exc
 
-    @staticmethod
-    def _ogd_variable_candidates(ogd_variable: str) -> List[str]:
-        primary = str(ogd_variable or "").strip()
-        if not primary:
-            return []
-        upper = primary.upper()
-        aliases = {
-            "PS": ["PS", "PRES_SFC", "pres_sfc", "sp", "ps"],
-            "PRES_SFC": ["PRES_SFC", "PS", "pres_sfc", "sp", "ps"],
-            "TOT_PREC": ["TOT_PREC", "tot_prec", "TP", "tp"],
-            "T_2M": ["T_2M", "t_2m", "2t", "2T"],
-            "TD_2M": ["TD_2M", "td_2m", "2d", "2D"],
-            "U_10M": ["U_10M", "u_10m", "10u", "u10"],
-            "V_10M": ["V_10M", "v_10m", "10v", "v10"],
-            "VMAX_10M": ["VMAX_10M", "vmax_10m", "10fg"],
-            "W_SNOW": ["W_SNOW", "w_snow", "sd"],
-            "SNOW": ["SNOW", "snow", "sf"],
-        }
-        candidates = aliases.get(upper, [primary, upper, primary.lower()])
-        deduped: List[str] = []
-        seen: set[str] = set()
-        for token in candidates:
-            value = str(token).strip()
-            if value and value not in seen:
-                deduped.append(value)
-                seen.add(value)
-        return deduped
-
-    @staticmethod
-    def _horizon_candidates(requested_lead: int) -> List[int]:
-        candidates: List[int] = []
-        for step in OGD_HORIZON_FALLBACK_STEPS:
-            lead = int(requested_lead + int(step))
-            if lead < 0:
-                continue
-            if lead not in candidates:
-                candidates.append(lead)
-        return candidates
 
     @staticmethod
     def _safe_asset_urls_for_request(ogd_api, request) -> List[str]:
@@ -2711,7 +2531,7 @@ class ForecastStore:
                     continue
                 mtime = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
                 if mtime < cutoff:
-                    self._safe_unlink(path)
+                    safe_unlink(path)
                     continue
                 files.append(path)
                 total_size += int(stat.st_size)
@@ -2725,7 +2545,7 @@ class ForecastStore:
                     size = int(path.stat().st_size)
                 except OSError:
                     size = 0
-                self._safe_unlink(path)
+                safe_unlink(path)
                 total_size = max(0, total_size - size)
 
     def _previous_available_lead(self, dataset_id: str, init_str: str, lead_hour: int) -> int | None:
@@ -2735,24 +2555,6 @@ class ForecastStore:
             return None
         return int(max(previous))
 
-    @staticmethod
-    def _field_end_step(info: Dict[str, object], fallback_lead_hour: int) -> float:
-        raw = info.get("end_step")
-        try:
-            if raw is not None:
-                return float(raw)
-        except (TypeError, ValueError):
-            pass
-        return float(fallback_lead_hour)
-
-    @staticmethod
-    def _deaggregate_from_reference(
-        current: np.ndarray, previous: np.ndarray, kind: str, end_step: float, previous_end_step: float
-    ) -> np.ndarray:
-        window = max(1.0, float(end_step) - float(previous_end_step))
-        if kind == "avg":
-            return ((current * float(end_step)) - (previous * float(previous_end_step))) / window
-        return current - previous
 
     def _deaggregate_kind_for_field(self, variable_id: str, info: Dict[str, object]) -> Tuple[str | None, str]:
         aggregation = str(info.get("aggregation_kind", "")).strip().lower()
@@ -2772,23 +2574,6 @@ class ForecastStore:
             return "avg", "Applied variable-level fallback average de-aggregation"
         return None, ""
 
-    @staticmethod
-    def _reduce_members(members: np.ndarray, type_id: str) -> np.ndarray:
-        if members.ndim != 3:
-            raise RuntimeError(f"Expected member stack with shape (member,y,x), got {members.shape}")
-        if type_id == "mean":
-            return np.nanmean(members, axis=0).astype(np.float32)
-        if type_id == "median":
-            return np.nanmedian(members, axis=0).astype(np.float32)
-        if type_id == "p10":
-            return np.nanpercentile(members, 10, axis=0).astype(np.float32)
-        if type_id == "p90":
-            return np.nanpercentile(members, 90, axis=0).astype(np.float32)
-        if type_id == "min":
-            return np.nanmin(members, axis=0).astype(np.float32)
-        if type_id == "max":
-            return np.nanmax(members, axis=0).astype(np.float32)
-        raise ValueError(f"Unsupported ensemble statistic: {type_id}")
 
     def _normalize_variable_units(self, field: np.ndarray, variable_id: str, units_hint: str) -> np.ndarray:
         result = field.astype(np.float32)
@@ -3096,14 +2881,14 @@ class ForecastStore:
         source = ogd_api.data_source.URLDataSource(urls=source_urls)
         geo_coords = getattr(ogd_api, "_geo_coords", None)
 
-        candidates = self._decode_param_candidates(request.variable)
+        candidates = decode_param_candidates(request.variable)
         for param in candidates:
             try:
                 result = ogd_api.grib_decoder.load(source, {"param": param}, geo_coords=geo_coords)
             except Exception:
                 continue
             if result:
-                return self._pick_best_array(result, request.variable)
+                return pick_best_array(result, request.variable)
 
         try:
             result = ogd_api.grib_decoder.load(source, {}, geo_coords=geo_coords)
@@ -3121,110 +2906,9 @@ class ForecastStore:
                     f"Decoded OGD asset is empty for variable {request.variable}"
                 ) from (original_error or RuntimeError("Empty decode result"))
 
-        return self._pick_best_array(result, request.variable)
+        return pick_best_array(result, request.variable)
 
-    @staticmethod
-    def _decode_param_candidates(stac_variable: str) -> List[str]:
-        upper = stac_variable.upper()
-        mapping = {
-            "T_2M": ["T_2M", "2t", "t_2m", "2T"],
-            "TD_2M": ["TD_2M", "2d", "td_2m", "2D"],
-            "PRES_SFC": ["PRES_SFC", "PS", "ps", "sp", "pres_sfc", "sfc_pressure"],
-            "PS": ["PS", "ps", "sp", "PRES_SFC", "pres_sfc", "sfc_pressure"],
-            "U_10M": ["U_10M", "10u", "u10", "u_10m"],
-            "V_10M": ["V_10M", "10v", "v10", "v_10m"],
-            "VMAX_10M": ["VMAX_10M", "10fg", "vmax_10m", "gust"],
-            "CLCT": ["CLCT", "tcc", "clct"],
-            "CLCL": ["CLCL", "lcc", "clcl"],
-            "CLCM": ["CLCM", "mcc", "clcm"],
-            "CLCH": ["CLCH", "hcc", "clch"],
-            "CEILING": ["CEILING", "ceiling"],
-            "TOT_PREC": ["TOT_PREC", "tp", "tot_prec"],
-            "RAIN_GSP": ["RAIN_GSP", "rain_gsp", "lsrain", "rain"],
-            "W_SNOW": ["W_SNOW", "sd", "w_snow"],
-            "SNOW_GSP": ["SNOW_GSP", "snow_gsp", "lssnow"],
-            "SNOWLMT": ["SNOWLMT", "snowlmt", "snowlmt_h"],
-            "HZEROCL": ["HZEROCL", "hzerocl", "h0cl"],
-            "DURSUN": ["DURSUN", "dursun", "sunshine_duration"],
-            "ASOB_S": ["ASOB_S", "asob_s"],
-            "ATHB_S": ["ATHB_S", "athb_s"],
-            "ASWDIR_S": ["ASWDIR_S", "aswdir_s"],
-            "ASWDIFD_S": ["ASWDIFD_S", "aswdifd_s"],
-            "ASHFL_S": ["ASHFL_S", "ashfl_s"],
-            "ALHFL_S": ["ALHFL_S", "alhfl_s"],
-            "CAPE_ML": ["CAPE_ML", "cape_ml", "cape"],
-            "CIN_ML": ["CIN_ML", "cin_ml", "cin"],
-            "HSURF": ["HSURF", "hsurf", "orog", "z"],
-        }
-        return mapping.get(upper, [stac_variable, stac_variable.lower()])
 
-    @staticmethod
-    def _pick_best_array(result_map: Dict[str, object], requested_variable: str):
-        if requested_variable in result_map:
-            return result_map[requested_variable]
-
-        aliases = {
-            "T_2M": ["2t", "t_2m", "2T"],
-            "TD_2M": ["2d", "td_2m", "2D"],
-            "PRES_SFC": ["PS", "ps", "sp", "pres_sfc", "sfc_pressure"],
-            "PS": ["ps", "sp", "PRES_SFC", "pres_sfc", "sfc_pressure"],
-            "U_10M": ["10u", "u10", "u_10m"],
-            "V_10M": ["10v", "v10", "v_10m"],
-            "VMAX_10M": ["10fg", "vmax_10m", "gust"],
-            "CLCT": ["tcc", "clct"],
-            "CLCL": ["lcc", "clcl"],
-            "CLCM": ["mcc", "clcm"],
-            "CLCH": ["hcc", "clch"],
-            "CEILING": ["ceiling"],
-            "TOT_PREC": ["tp", "tot_prec"],
-            "RAIN_GSP": ["rain_gsp", "lsrain", "rain"],
-            "W_SNOW": ["sd", "w_snow"],
-            "SNOW_GSP": ["snow_gsp", "lssnow"],
-            "SNOWLMT": ["snowlmt", "snowlmt_h"],
-            "HZEROCL": ["hzerocl", "h0cl"],
-            "DURSUN": ["dursun", "sunshine_duration"],
-            "ASOB_S": ["asob_s"],
-            "ATHB_S": ["athb_s"],
-            "ASWDIR_S": ["aswdir_s"],
-            "ASWDIFD_S": ["aswdifd_s"],
-            "ASHFL_S": ["ashfl_s"],
-            "ALHFL_S": ["alhfl_s"],
-            "CAPE_ML": ["cape_ml", "cape"],
-            "CIN_ML": ["cin_ml", "cin"],
-            "HSURF": ["hsurf", "orog", "z"],
-        }
-        for alias in aliases.get(requested_variable.upper(), []):
-            if alias in result_map:
-                return result_map[alias]
-
-        available = ", ".join(sorted(str(k) for k in result_map.keys()))
-        raise RuntimeError(
-            f"Requested variable {requested_variable} not found in decoded GRIB payload. "
-            f"Available keys: {available}"
-        )
-
-    @staticmethod
-    def _ensure_eccodes_definition_path() -> None:
-        if os.environ.get("ECCODES_DEFINITION_PATH"):
-            return
-
-        cwd_defs = (Path.cwd() / ".venv/share/eccodes-cosmo-resources/definitions").resolve()
-        prefix_defs = (Path(sys.prefix) / "share/eccodes-cosmo-resources/definitions").resolve()
-
-        if cwd_defs.exists():
-            os.environ["ECCODES_DEFINITION_PATH"] = str(cwd_defs)
-            return
-        if prefix_defs.exists():
-            os.environ["ECCODES_DEFINITION_PATH"] = str(prefix_defs)
-            return
-
-        raise RuntimeError(
-            "Missing ecCodes COSMO definitions. Expected one of:\n"
-            f" - {cwd_defs}\n"
-            f" - {prefix_defs}\n"
-            "Install dependencies in the project virtualenv so "
-            ".venv/share/eccodes-cosmo-resources/definitions is present."
-        )
 
     def _get_key_lock(self, key: Tuple[str, ...]) -> threading.Lock:
         with self._key_locks_guard:
@@ -3254,27 +2938,19 @@ class ForecastStore:
                     dims.pop(axis)
 
         dims_t = tuple(dims)
-        member_axis = self._member_axis(dims_t, values.ndim)
-        if member_axis is None:
+        axis_idx = member_axis(dims_t, values.ndim)
+        if axis_idx is None:
             raise RuntimeError(
                 "Failed to identify ensemble member dimension. "
                 f"dims={tuple(getattr(data_array, 'dims', ()))}, shape={values.shape}"
             )
 
-        moved = np.moveaxis(values, member_axis, 0)
+        moved = np.moveaxis(values, axis_idx, 0)
         spatial_shape = moved.shape[1:]
         lat, lon = self._extract_lat_lon(data_array, spatial_shape)
         regridded = [self._regrid_values(moved[idx], lat, lon, dataset_id) for idx in range(moved.shape[0])]
         return np.stack(regridded, axis=0).astype(np.float32)
 
-    @staticmethod
-    def _member_axis(dims: Tuple[str, ...], ndim: int) -> int | None:
-        candidates = {"eps", "number", "member", "realization", "ensemble_member", "perturbationNumber"}
-        for idx, dim in enumerate(dims):
-            if str(dim) in candidates:
-                return idx
-        # Be strict to avoid reducing over the wrong axis when metadata changes.
-        return None
 
     def _regrid_values(self, values: np.ndarray, lat: np.ndarray, lon: np.ndarray, dataset_id: str) -> np.ndarray:
         values = np.asarray(values)
@@ -3301,7 +2977,7 @@ class ForecastStore:
             grid = val_sum / val_count
 
         grid = np.flipud(grid)
-        grid = self._fill_nan_with_neighbors(grid)
+        grid = fill_nan_with_neighbors(grid)
         return grid
 
     def _target_grid_shape(self, dataset_id: str) -> Tuple[int, int]:
@@ -3377,47 +3053,6 @@ class ForecastStore:
             "Check meteodata-lab output format for this variable."
         )
 
-    @staticmethod
-    def _fill_nan_with_neighbors(grid: np.ndarray) -> np.ndarray:
-        result = grid.copy()
-        global_mean = float(np.nanmean(result)) if np.isfinite(np.nanmean(result)) else 0.0
-
-        for _ in range(8):
-            nan_mask = ~np.isfinite(result)
-            if not np.any(nan_mask):
-                break
-
-            neighbor_sum = np.zeros_like(result, dtype=np.float64)
-            neighbor_count = np.zeros_like(result, dtype=np.int16)
-
-            for dy, dx in [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1)]:
-                if dy >= 0:
-                    src_y = slice(0, result.shape[0] - dy)
-                    dst_y = slice(dy, result.shape[0])
-                else:
-                    src_y = slice(-dy, result.shape[0])
-                    dst_y = slice(0, result.shape[0] + dy)
-                if dx >= 0:
-                    src_x = slice(0, result.shape[1] - dx)
-                    dst_x = slice(dx, result.shape[1])
-                else:
-                    src_x = slice(-dx, result.shape[1])
-                    dst_x = slice(0, result.shape[1] + dx)
-
-                neighbor = result[src_y, src_x]
-                finite = np.isfinite(neighbor)
-                if not np.any(finite):
-                    continue
-                dst_sum = neighbor_sum[dst_y, dst_x]
-                dst_count = neighbor_count[dst_y, dst_x]
-                dst_sum[finite] += neighbor[finite]
-                dst_count[finite] += 1
-
-            fillable = nan_mask & (neighbor_count > 0)
-            result[fillable] = neighbor_sum[fillable] / neighbor_count[fillable]
-
-        result[~np.isfinite(result)] = global_mean
-        return result.astype(np.float32)
 
     def _catalog_cache_path(self, dataset_id: str) -> Path:
         return self._catalog_cache_dir / f"catalog_{dataset_id}.json"
@@ -3525,7 +3160,7 @@ class ForecastStore:
             init_to_leads.setdefault(init, set())
             if not horizon:
                 continue
-            lead_h = self._parse_iso_duration_hours(horizon)
+            lead_h = parse_iso_duration_hours(horizon)
             if lead_h is None:
                 continue
 
@@ -3661,45 +3296,45 @@ class ForecastStore:
                 version, dataset_id, init_str = parsed
 
                 if version != FIELD_CACHE_VERSION:
-                    self._safe_unlink(path)
+                    safe_unlink(path)
                     continue
 
                 if dataset_id not in self._dataset_configs:
-                    self._safe_unlink(path)
+                    safe_unlink(path)
                     continue
 
                 if keep_inits_by_dataset.get(dataset_id) and init_str not in keep_inits_by_dataset[dataset_id]:
-                    self._safe_unlink(path)
+                    safe_unlink(path)
                     continue
 
                 try:
                     init_dt = datetime.strptime(init_str, "%Y%m%d%H").replace(tzinfo=timezone.utc)
                 except ValueError:
-                    self._safe_unlink(path)
+                    safe_unlink(path)
                     continue
                 if init_dt < cutoff:
-                    self._safe_unlink(path)
+                    safe_unlink(path)
             for path in self._vector_cache_dir.glob("*.npz"):
                 parsed = self._parse_field_cache_filename(path.name)
                 if parsed is None:
                     continue
                 version, dataset_id, init_str = parsed
                 if version != FIELD_CACHE_VERSION:
-                    self._safe_unlink(path)
+                    safe_unlink(path)
                     continue
                 if dataset_id not in self._dataset_configs:
-                    self._safe_unlink(path)
+                    safe_unlink(path)
                     continue
                 if keep_inits_by_dataset.get(dataset_id) and init_str not in keep_inits_by_dataset[dataset_id]:
-                    self._safe_unlink(path)
+                    safe_unlink(path)
                     continue
                 try:
                     init_dt = datetime.strptime(init_str, "%Y%m%d%H").replace(tzinfo=timezone.utc)
                 except ValueError:
-                    self._safe_unlink(path)
+                    safe_unlink(path)
                     continue
                 if init_dt < cutoff:
-                    self._safe_unlink(path)
+                    safe_unlink(path)
         self._cleanup_grib_asset_cache(force=force)
 
     def _prune_memory_cache(self, keep_inits_by_dataset: Dict[str, set[str]], cutoff: datetime) -> None:
@@ -3797,26 +3432,3 @@ class ForecastStore:
         init_str = m2.group(1)
         return version, dataset_id, init_str
 
-    @staticmethod
-    def _safe_unlink(path: Path) -> None:
-        try:
-            path.unlink(missing_ok=True)
-        except OSError:
-            pass
-
-    @staticmethod
-    def _parse_iso_duration_hours(value: str) -> int | None:
-        match = re.fullmatch(r"P(?:(\d+)D)?T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", value)
-        if not match:
-            return None
-        days = int(match.group(1) or 0)
-        hours = int(match.group(2) or 0)
-        minutes = int(match.group(3) or 0)
-        seconds = int(match.group(4) or 0)
-        total_hours = days * 24 + hours + minutes / 60 + seconds / 3600
-        return int(round(total_hours))
-
-    @staticmethod
-    def _init_to_iso(init_str: str) -> str:
-        dt = datetime.strptime(init_str, "%Y%m%d%H").replace(tzinfo=timezone.utc)
-        return dt.isoformat().replace("+00:00", "Z")
