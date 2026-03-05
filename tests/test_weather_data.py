@@ -7,6 +7,7 @@ import types
 import numpy as np
 
 from weather_data import DatasetMeta, ForecastStore
+from weather_grib import fill_nan_with_neighbors
 
 
 class WeatherDataTests(unittest.TestCase):
@@ -151,7 +152,7 @@ class WeatherDataTests(unittest.TestCase):
 
     def test_fill_nan_with_neighbors_does_not_wrap_edges(self):
         grid = np.array([[np.nan, 1.0, np.nan, np.nan, 100.0]], dtype=np.float32)
-        filled = ForecastStore._fill_nan_with_neighbors(grid)
+        filled = fill_nan_with_neighbors(grid)
         # Left edge may only be influenced by in-domain neighbors, not wrapped far edge values.
         self.assertLess(float(filled[0, 0]), 10.0)
         self.assertGreater(float(filled[0, 4]), 90.0)
@@ -245,15 +246,13 @@ class WeatherDataTests(unittest.TestCase):
             _geo_coords=None,
         )
 
-        with patch.object(store, "_ensure_eccodes_definition_path", return_value=None), patch.object(
+        with patch("weather_data.ensure_eccodes_definition_path", return_value=None), patch.object(
             store, "init_times", return_value=["2026022500"]
         ), patch.object(store, "_fetch_direct_regridded", side_effect=RuntimeError("direct fetch failed")), patch.object(
             store, "_discover_constants_asset_url", return_value="https://example/horizontal_constants_icon-ch1-eps.grib2"
         ) as mocked_discover, patch.object(
             store, "_materialize_asset_urls", return_value=["file:///tmp/horizontal_constants_icon-ch1-eps.grib2"]
-        ), patch.object(
-            store, "_pick_best_array", return_value=np.ones((2, 2), dtype=np.float32)
-        ), patch.object(
+        ), patch("weather_data.pick_best_array", return_value=np.ones((2, 2), dtype=np.float32)), patch.object(
             store, "_regrid_data_array", return_value=np.ones((3, 4), dtype=np.float32) * 123.0
         ), patch.dict(
             "sys.modules", {"meteodatalab": types.SimpleNamespace(ogd_api=fake_ogd_api)}
