@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 import os
@@ -153,10 +154,23 @@ async def _api_trace_middleware(request: Request, call_next):
         response = await call_next(request)
         status_code = int(getattr(response, "status_code", 500))
         return response
+    except asyncio.CancelledError:
+        # Expected during client disconnects and server shutdown.
+        # Returning 499 avoids noisy cancellation tracebacks in logs.
+        status_code = 499
+        return Response(status_code=499)
     finally:
         elapsed_ms = (time.perf_counter() - start) * 1000.0
         # Keep high-volume tile traces at DEBUG while surfacing slow/failing API calls.
         if path.startswith("/api/tiles/"):
+            LOGGER.debug(
+                "API trace path=%s status=%s ms=%.1f vt=%s",
+                path,
+                status_code,
+                elapsed_ms,
+                view_token,
+            )
+        elif status_code == 499:
             LOGGER.debug(
                 "API trace path=%s status=%s ms=%.1f vt=%s",
                 path,

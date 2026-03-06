@@ -85,6 +85,7 @@ const els = {
   layerToggleBtn: document.getElementById("layerToggleBtn"),
   layerPanel: document.getElementById("layerPanel"),
   layerBasemap: document.getElementById("layerBasemap"),
+  layerBasemapStyle: document.getElementById("layerBasemapStyle"),
   geoLocateBtn: document.getElementById("geoLocateBtn"),
   zoomInBtn: document.getElementById("zoomInBtn"),
   zoomOutBtn: document.getElementById("zoomOutBtn"),
@@ -108,6 +109,170 @@ const MODEL_ELEVATION_MEMO_TTL_MS = 20 * 60 * 1000;
 const MODEL_ELEVATION_FAILURE_COOLDOWN_MS = 10 * 60 * 1000;
 const modelElevationMemo = new Map();
 const modelElevationFailureAt = new Map();
+const BASEMAP_SOURCE_ID = "basemap-source";
+const BASEMAP_LAYER_ID = "basemap-layer";
+const SELECTED_POINT_SOURCE_ID = "selected-point-source";
+const SELECTED_POINT_LAYER_ID = "selected-point-layer";
+const DEFAULT_BASEMAP_ID = "swisstopo_gray";
+let selectedBasemapId = DEFAULT_BASEMAP_ID;
+
+function buildBasemapCatalog() {
+  return [
+    {
+      id: "swisstopo_gray",
+      label: "SwissTopo Gray",
+      tiles: ["https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.pixelkarte-grau/default/current/3857/{z}/{x}/{y}.jpeg"],
+    },
+    {
+      id: "swisstopo_color",
+      label: "SwissTopo Color",
+      tiles: ["https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.pixelkarte-farbe/default/current/3857/{z}/{x}/{y}.jpeg"],
+    },
+    {
+      id: "swisstopo_winter",
+      label: "SwissTopo Winter",
+      tiles: [
+        "https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.pixelkarte-farbe-winter/default/current/3857/{z}/{x}/{y}.jpeg",
+      ],
+    },
+    {
+      id: "swisstopo_satellite",
+      label: "SwissTopo SwissImage",
+      tiles: ["https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.swissimage/default/current/3857/{z}/{x}/{y}.jpeg"],
+    },
+    {
+      id: "osm_standard",
+      label: "OpenStreetMap Standard",
+      tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
+    },
+    {
+      id: "carto_light",
+      label: "Carto Positron Light",
+      tiles: ["https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"],
+    },
+    {
+      id: "carto_dark",
+      label: "Carto Dark Matter",
+      tiles: ["https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"],
+    },
+  ];
+}
+
+function basemapById(id) {
+  const catalog = buildBasemapCatalog();
+  return catalog.find((entry) => entry.id === id) || catalog.find((entry) => entry.id === DEFAULT_BASEMAP_ID) || catalog[0];
+}
+
+function populateBasemapStyleOptions() {
+  if (!els.layerBasemapStyle) {
+    return;
+  }
+  const catalog = buildBasemapCatalog();
+  els.layerBasemapStyle.innerHTML = "";
+  for (const entry of catalog) {
+    const option = document.createElement("option");
+    option.value = entry.id;
+    option.textContent = entry.label;
+    option.disabled = !!entry.disabled;
+    option.selected = entry.id === selectedBasemapId;
+    els.layerBasemapStyle.appendChild(option);
+  }
+  const selected = basemapById(selectedBasemapId);
+  if (selected?.disabled) {
+    selectedBasemapId = DEFAULT_BASEMAP_ID;
+    els.layerBasemapStyle.value = selectedBasemapId;
+  }
+}
+
+function applyBasemapStyle() {
+  if (!map) {
+    return;
+  }
+  const selected = basemapById(selectedBasemapId);
+  if (!Array.isArray(selected.tiles) || selected.tiles.length === 0) {
+    return;
+  }
+  const source = map.getSource(BASEMAP_SOURCE_ID);
+  if (source && typeof source.setTiles === "function") {
+    source.setTiles(selected.tiles);
+    return;
+  }
+  if (map.getLayer(BASEMAP_LAYER_ID)) {
+    map.removeLayer(BASEMAP_LAYER_ID);
+  }
+  if (map.getSource(BASEMAP_SOURCE_ID)) {
+    map.removeSource(BASEMAP_SOURCE_ID);
+  }
+  map.addSource(BASEMAP_SOURCE_ID, {
+    type: "raster",
+    tiles: selected.tiles,
+    tileSize: 256,
+  });
+  const beforeLayerId = map.getLayer("weather-layer") ? "weather-layer" : undefined;
+  map.addLayer(
+    {
+      id: BASEMAP_LAYER_ID,
+      type: "raster",
+      source: BASEMAP_SOURCE_ID,
+    },
+    beforeLayerId
+  );
+}
+
+function ensureSelectedPointLayer() {
+  if (!map || !isMapStyleReady()) {
+    return;
+  }
+  if (!map.getSource(SELECTED_POINT_SOURCE_ID)) {
+    map.addSource(SELECTED_POINT_SOURCE_ID, {
+      type: "geojson",
+      data: { type: "FeatureCollection", features: [] },
+    });
+  }
+  if (!map.getLayer(SELECTED_POINT_LAYER_ID)) {
+    map.addLayer({
+      id: SELECTED_POINT_LAYER_ID,
+      type: "circle",
+      source: SELECTED_POINT_SOURCE_ID,
+      paint: {
+        "circle-radius": 4,
+        "circle-color": "#d90429",
+        "circle-stroke-color": "#ffffff",
+        "circle-stroke-width": 1.5,
+        "circle-opacity": 0.95,
+      },
+    });
+  }
+  if (map.getLayer(SELECTED_POINT_LAYER_ID)) {
+    map.moveLayer(SELECTED_POINT_LAYER_ID);
+  }
+}
+
+function updateSelectedPointMarker() {
+  if (!map || !isMapStyleReady()) {
+    return;
+  }
+  ensureSelectedPointLayer();
+  const source = map.getSource(SELECTED_POINT_SOURCE_ID);
+  if (!source || typeof source.setData !== "function") {
+    return;
+  }
+  const point = state.pinnedPoint;
+  const features =
+    point && Number.isFinite(Number(point.lat)) && Number.isFinite(Number(point.lon))
+      ? [
+          {
+            type: "Feature",
+            geometry: {
+              type: "Point",
+              coordinates: [Number(point.lon), Number(point.lat)],
+            },
+            properties: {},
+          },
+        ]
+      : [];
+  source.setData({ type: "FeatureCollection", features });
+}
 
 function initMap() {
   if (map) {
@@ -122,19 +287,17 @@ function initMap() {
     style: {
       version: 8,
       sources: {
-        swissgray: {
+        [BASEMAP_SOURCE_ID]: {
           type: "raster",
-          tiles: [
-            "https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.pixelkarte-grau/default/current/3857/{z}/{x}/{y}.jpeg",
-          ],
+          tiles: basemapById(selectedBasemapId).tiles,
           tileSize: 256,
         },
       },
       layers: [
         {
-          id: "swissgray",
+          id: BASEMAP_LAYER_ID,
           type: "raster",
-          source: "swissgray",
+          source: BASEMAP_SOURCE_ID,
         },
       ],
     },
@@ -147,7 +310,7 @@ function initMap() {
     new maplibregl.AttributionControl({
       compact: true,
       customAttribution:
-        '<a href="https://maplibre.org/" target="_blank" rel="noopener noreferrer">MapLibre</a> | Map: <a href="https://www.swisstopo.admin.ch/en" target="_blank" rel="noopener noreferrer">Swisstopo</a> | Data: <a href="https://www.meteoswiss.admin.ch/" target="_blank" rel="noopener noreferrer">MeteoSwiss</a>',
+        '<a href="https://maplibre.org/" target="_blank" rel="noopener noreferrer">MapLibre</a> | Map: <a href="https://www.swisstopo.admin.ch/en" target="_blank" rel="noopener noreferrer">SwissTopo</a>, <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OSM</a>, <a href="https://carto.com/attributions" target="_blank" rel="noopener noreferrer">Carto</a> | Data: <a href="https://www.meteoswiss.admin.ch/" target="_blank" rel="noopener noreferrer">MeteoSwiss</a>',
     })
   );
   map.addControl(new maplibregl.ScaleControl({ maxWidth: 120, unit: "metric" }), "top-right");
@@ -201,6 +364,9 @@ let searchSuggestTimer = null;
 let meteogramFlowContext = null;
 let meteogramFlowBusy = false;
 let meteogramFlowWarmupAbortController = null;
+let pinnedSeriesAbortController = null;
+let pinnedElevationAbortController = null;
+let pinnedPointLoadTimer = null;
 const meteogramWarmupFlights = new Map();
 let currentViewToken = "boot";
 let weatherLayerUiState = "idle"; // idle | loading | ready | unavailable
@@ -219,6 +385,45 @@ function computeCurrentViewToken() {
 
 function refreshCurrentViewToken() {
   currentViewToken = computeCurrentViewToken();
+}
+
+function clearHoverDisplay() {
+  lastHover = null;
+  if (hoverTimer) {
+    clearTimeout(hoverTimer);
+    hoverTimer = null;
+  }
+  if (abortController) {
+    abortController.abort();
+    abortController = null;
+  }
+  tooltip.style.display = "none";
+}
+
+function cancelPinnedPointRequests() {
+  if (pinnedSeriesAbortController) {
+    pinnedSeriesAbortController.abort();
+    pinnedSeriesAbortController = null;
+  }
+  if (pinnedElevationAbortController) {
+    pinnedElevationAbortController.abort();
+    pinnedElevationAbortController = null;
+  }
+  if (pinnedPointLoadTimer) {
+    clearTimeout(pinnedPointLoadTimer);
+    pinnedPointLoadTimer = null;
+  }
+}
+
+function schedulePinnedPointDataLoad(meta = {}) {
+  if (pinnedPointLoadTimer) {
+    clearTimeout(pinnedPointLoadTimer);
+  }
+  pinnedPointLoadTimer = setTimeout(() => {
+    pinnedPointLoadTimer = null;
+    loadSeriesForPinnedPoint();
+    void resolvePinnedPointElevations(meta);
+  }, 180);
 }
 
 window.__iconForecastRequestContext = () => ({
@@ -262,6 +467,7 @@ async function bootstrap() {
 
   map.on("load", () => {
     addOrReplaceWeatherLayer({ forceRecreateSource: true });
+    updateSelectedPointMarker();
     applyMapUrlState(initialUrlState);
     if (state.pinnedPoint) {
       loadSeriesForPinnedPoint();
@@ -272,18 +478,7 @@ async function bootstrap() {
 
   map.on("mousemove", onMapMouseMove);
   map.on("click", onMapClick);
-  map.on("mouseleave", () => {
-    lastHover = null;
-    if (hoverTimer) {
-      clearTimeout(hoverTimer);
-      hoverTimer = null;
-    }
-    if (abortController) {
-      abortController.abort();
-      abortController = null;
-    }
-    tooltip.style.display = "none";
-  });
+  map.on("mouseleave", clearHoverDisplay);
   map.on("dataloading", onMapDataLoading);
   map.on("sourcedata", onMapSourceData);
   map.on("error", onMapError);
@@ -297,6 +492,9 @@ async function bootstrap() {
       scheduleWindVectorUpdate(0);
     }
   });
+  const canvas = map.getCanvas();
+  canvas?.addEventListener("mouseleave", clearHoverDisplay);
+  canvas?.addEventListener("pointerleave", clearHoverDisplay);
   setupAttributionInfoBehavior();
   bindMapOverlayControls();
 
@@ -717,6 +915,15 @@ function bindMapOverlayControls() {
       applyLayerVisibility();
     });
   }
+  if (els.layerBasemapStyle) {
+    populateBasemapStyleOptions();
+    els.layerBasemapStyle.addEventListener("change", () => {
+      const nextId = String(els.layerBasemapStyle?.value || DEFAULT_BASEMAP_ID);
+      selectedBasemapId = basemapById(nextId).id;
+      applyBasemapStyle();
+      applyLayerVisibility();
+    });
+  }
 
   if (els.geoLocateBtn) {
     els.geoLocateBtn.addEventListener("click", () => {
@@ -811,6 +1018,7 @@ function hideSearchSuggestions() {
 
 
 async function setPinnedPointFromSelection(lat, lon, meta = {}) {
+  cancelPinnedPointRequests();
   state.pinnedPoint = { lat: Number(lat), lon: Number(lon) };
   state.pinnedLocationName = String(meta.label || "").trim();
   state.pinnedLocationElevationM = null;
@@ -819,10 +1027,10 @@ async function setPinnedPointFromSelection(lat, lon, meta = {}) {
   if (els.meteogramBlock && typeof els.meteogramBlock.open === "boolean") {
     els.meteogramBlock.open = true;
   }
+  updateSelectedPointMarker();
   updatePinnedPointText("Loading...");
-  loadSeriesForPinnedPoint();
+  schedulePinnedPointDataLoad(meta);
   updateUrlState();
-  void resolvePinnedPointElevations(meta);
 }
 
 function nearestModelGridPoint(datasetId, lat, lon) {
@@ -871,12 +1079,19 @@ async function resolvePinnedPointElevations(meta = {}) {
   if (!state.pinnedPoint) {
     return;
   }
+  const controller = new AbortController();
+  pinnedElevationAbortController = controller;
   const point = { ...state.pinnedPoint };
   const modelPoint = state.pinnedModelPoint ? { ...state.pinnedModelPoint } : null;
   const [actual, model] = await Promise.all([
     fetchSwissTopoHeight(point.lat, point.lon, meta.easting, meta.northing),
-    modelPoint ? fetchModelElevation(state.datasetId, modelPoint.lat, modelPoint.lon) : Promise.resolve(null),
+    modelPoint
+      ? fetchModelElevation(state.datasetId, modelPoint.lat, modelPoint.lon, { signal: controller.signal })
+      : Promise.resolve(null),
   ]);
+  if (pinnedElevationAbortController === controller) {
+    pinnedElevationAbortController = null;
+  }
   if (!state.pinnedPoint) {
     return;
   }
@@ -890,7 +1105,7 @@ async function resolvePinnedPointElevations(meta = {}) {
 
 
 
-async function fetchModelElevation(datasetId, lat, lon) {
+async function fetchModelElevation(datasetId, lat, lon, { signal } = {}) {
   if (!datasetId || !Number.isFinite(lat) || !Number.isFinite(lon)) {
     return null;
   }
@@ -910,12 +1125,17 @@ async function fetchModelElevation(datasetId, lat, lon) {
       lat: String(lat),
       lon: String(lon),
     });
-    const resp = await fetch(`/api/model-elevation?${qs.toString()}`);
-    if (!resp.ok) {
-      modelElevationFailureAt.set(String(datasetId), now);
-      return null;
+    let payload = null;
+    if (typeof fetchJson === "function") {
+      payload = await fetchJson(`/api/model-elevation?${qs.toString()}`, { signal, timeoutMs: 12000 });
+    } else {
+      const resp = await fetch(`/api/model-elevation?${qs.toString()}`, { signal });
+      if (!resp.ok) {
+        modelElevationFailureAt.set(String(datasetId), now);
+        return null;
+      }
+      payload = await resp.json();
     }
-    const payload = await resp.json();
     const value = Number(payload?.model_elevation_m);
     if (Number.isFinite(value)) {
       modelElevationMemo.set(key, { ts: now, value });
@@ -924,6 +1144,9 @@ async function fetchModelElevation(datasetId, lat, lon) {
     }
     return null;
   } catch (_err) {
+    if (_err?.name === "AbortError") {
+      return null;
+    }
     modelElevationFailureAt.set(String(datasetId), now);
     return null;
   }
@@ -1029,7 +1252,7 @@ function applyLayerVisibility() {
     }
     map.setLayoutProperty(id, "visibility", visible ? "visible" : "none");
   };
-  setVis("swissgray", layerVisibility.basemap);
+  setVis(BASEMAP_LAYER_ID, layerVisibility.basemap);
 }
 
 function updateLeadLabel() {
@@ -1263,6 +1486,7 @@ function addOrReplaceWeatherLayer({ forceRecreateSource = false } = {}) {
       els.fieldDebugInfo.textContent = "";
     }
     deactivateWindVectors();
+    updateSelectedPointMarker();
     return;
   }
 
@@ -1297,12 +1521,14 @@ function addOrReplaceWeatherLayer({ forceRecreateSource = false } = {}) {
       source: sourceId,
       paint: {
         "raster-opacity": 0.78,
-        "raster-fade-duration": 180,
+        "raster-fade-duration": 0,
+        "raster-resampling": "nearest",
       },
     });
     applyLayerVisibility();
     prefetchUpcomingLeads(PREFETCH_AHEAD_COUNT);
     scheduleWindVectorUpdate(0);
+    updateSelectedPointMarker();
     return;
   }
 
@@ -1325,7 +1551,8 @@ function addOrReplaceWeatherLayer({ forceRecreateSource = false } = {}) {
       source: sourceId,
       paint: {
         "raster-opacity": 0.78,
-        "raster-fade-duration": 180,
+        "raster-fade-duration": 0,
+        "raster-resampling": "nearest",
       },
     });
     applyLayerVisibility();
@@ -1333,6 +1560,7 @@ function addOrReplaceWeatherLayer({ forceRecreateSource = false } = {}) {
   applyLayerVisibility();
   prefetchUpcomingLeads(PREFETCH_AHEAD_COUNT);
   scheduleWindVectorUpdate(0);
+  updateSelectedPointMarker();
 }
 
 function onMapDataLoading(event) {
@@ -1954,6 +2182,7 @@ function onLeadKeydown(event) {
 
 function onMapMouseMove(e) {
   if (!state.init || !state.datasetId || !state.variableId) {
+    clearHoverDisplay();
     return;
   }
   tooltip.style.display = "block";
@@ -1987,6 +2216,11 @@ async function loadSeriesForPinnedPoint() {
     renderMeteogram();
     return;
   }
+  if (pinnedSeriesAbortController) {
+    pinnedSeriesAbortController.abort();
+  }
+  const controller = new AbortController();
+  pinnedSeriesAbortController = controller;
   const { lat, lon } = state.pinnedPoint;
   const requestId = ++state.seriesRequestId;
   const requestToken = currentViewToken;
@@ -2000,7 +2234,10 @@ async function loadSeriesForPinnedPoint() {
     typeParam
   )}&time_operator=${encodeURIComponent(state.timeOperator || "none")}`;
   try {
-    const cachedData = await fetchJson(`${baseUrl}&cached_only=true&_vt=${encodeURIComponent(requestToken)}`, { timeoutMs: 10000 });
+    const cachedData = await fetchJson(`${baseUrl}&cached_only=true&_vt=${encodeURIComponent(requestToken)}`, {
+      timeoutMs: 10000,
+      signal: controller.signal,
+    });
     if (requestId !== state.seriesRequestId) {
       return;
     }
@@ -2014,7 +2251,10 @@ async function loadSeriesForPinnedPoint() {
 
     if (seriesHasMissingValues(cachedData, SERIES_TYPES)) {
       try {
-        const fullData = await fetchJson(`${baseUrl}&cached_only=false&_vt=${encodeURIComponent(requestToken)}`, { timeoutMs: 60000 });
+        const fullData = await fetchJson(`${baseUrl}&cached_only=false&_vt=${encodeURIComponent(requestToken)}`, {
+          timeoutMs: 60000,
+          signal: controller.signal,
+        });
         if (requestId !== state.seriesRequestId) {
           return;
         }
@@ -2034,6 +2274,9 @@ async function loadSeriesForPinnedPoint() {
       }
     }
   } catch (_err) {
+    if (_err?.name === "AbortError") {
+      return;
+    }
     if (requestId !== state.seriesRequestId) {
       return;
     }
@@ -2044,6 +2287,10 @@ async function loadSeriesForPinnedPoint() {
     state.seriesDiagnostics = null;
     updatePinnedPointText();
     renderMeteogram("Series unavailable");
+  } finally {
+    if (pinnedSeriesAbortController === controller) {
+      pinnedSeriesAbortController = null;
+    }
   }
 }
 
@@ -2838,7 +3085,8 @@ function renderFullMeteogramWindow(win, dataset, point, panelData) {
   const panelH = FULL_METEOGRAM_PANEL_HEIGHT;
   const topPad = FULL_METEOGRAM_TOP_PAD;
   const botPad = FULL_METEOGRAM_BOTTOM_PAD;
-  const canvasH = topPad + panelData.length * panelH + botPad;
+  const panelVerticalOffset = Math.round(FULL_METEOGRAM_PLOT_HEIGHT * 0.5);
+  const canvasH = topPad + panelVerticalOffset + panelData.length * panelH + botPad;
   const canvas = win.document.getElementById("fullMeteogramCanvas");
   if (!canvas) {
     return;
@@ -2883,7 +3131,7 @@ function renderFullMeteogramWindow(win, dataset, point, panelData) {
   drawLegendChip(ctx, legendStart + 548, legendY, "#1248ff", 3, [], "CTRL");
 
   for (let i = 0; i < panelData.length; i += 1) {
-    const top = topPad + i * panelH + 8;
+    const top = topPad + panelVerticalOffset + i * panelH + 8;
     drawFullMeteogramPanel(ctx, {
       x0: left + 6,
       y0: top,
@@ -3257,6 +3505,7 @@ function applyUrlState(urlState) {
     updatePinnedPointText();
     void resolvePinnedPointElevations();
   }
+  updateSelectedPointMarker();
 
   renderLegend();
   renderRefreshStatus();

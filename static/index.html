@@ -87,7 +87,9 @@
         <div id="layerControlWrap" class="mapControlBox">
           <button id="layerToggleBtn" type="button" aria-label="Toggle layers"><span class="layersGlyph"></span></button>
           <div id="layerPanel" hidden>
-            <label><input id="layerBasemap" type="checkbox" checked /> Basemap</label>
+            <label><input id="layerBasemap" type="checkbox" checked /> Show basemap</label>
+            <label for="layerBasemapStyle">Basemap style</label>
+            <select id="layerBasemapStyle" aria-label="Basemap style"></select>
           </div>
         </div>
         <div id="mapSummaryOverlay" aria-live="polite">
@@ -123,6 +125,6 @@
 
     <!-- TODO: add SRI integrity hashes -->
     <script src="https://unpkg.com/maplibre-gl@5.3.1/dist/maplibre-gl.js" crossorigin="anonymous"></script>
-    <script src="/main.js?v=20260305b" type="module"></script>
+    <script src="/main.js?v=20260305h" type="module"></script>
   </body>
 </html>

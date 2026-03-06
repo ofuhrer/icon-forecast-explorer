@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+import atexit
+from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError as FuturesTimeoutError, as_completed
 import hashlib
 import json
 import logging
@@ -89,6 +90,9 @@ from weather_grib import (
 )
 
 LOGGER = logging.getLogger("icon_forecast.weather_data")
+GRIB_DOWNLOAD_CONNECT_TIMEOUT_SECONDS = float(os.getenv("GRIB_DOWNLOAD_CONNECT_TIMEOUT_SECONDS", "6"))
+GRIB_DOWNLOAD_READ_TIMEOUT_SECONDS = float(os.getenv("GRIB_DOWNLOAD_READ_TIMEOUT_SECONDS", "20"))
+GRIB_DOWNLOAD_WAIT_TIMEOUT_SECONDS = float(os.getenv("GRIB_DOWNLOAD_WAIT_TIMEOUT_SECONDS", "25"))
 
 
 class ForecastStore:
@@ -408,6 +412,7 @@ class ForecastStore:
         self._last_cleanup_at = datetime.min.replace(tzinfo=timezone.utc)
         self._last_grib_asset_cleanup_at = datetime.min.replace(tzinfo=timezone.utc)
         self._cleanup_field_cache(force=True)
+        atexit.register(self.stop_background_prewarm)
 
     def start_background_prewarm(self) -> None:
         if not HOT_PREWARM_ENABLED:
@@ -429,6 +434,10 @@ class ForecastStore:
     def stop_background_prewarm(self) -> None:
         with self._prewarm_guard:
             self._prewarm_stop.set()
+            prewarm_thread = self._prewarm_thread
+            self._prewarm_thread = None
+        if prewarm_thread is not None and prewarm_thread.is_alive():
+            prewarm_thread.join(timeout=1.5)
         self._background_fetch_executor.shutdown(wait=False, cancel_futures=True)
         self._grib_download_executor.shutdown(wait=False, cancel_futures=True)
         self._meteogram_warm_executor.shutdown(wait=False, cancel_futures=True)
@@ -2415,7 +2424,12 @@ class ForecastStore:
             work.append((url_text, self._grib_asset_path_for_url(url_text)))
         futures: List[Future] = [self._ensure_grib_asset_cached(url_text, cache_path) for url_text, cache_path in work]
         for fut in futures:
-            fut.result()
+            try:
+                fut.result(timeout=GRIB_DOWNLOAD_WAIT_TIMEOUT_SECONDS)
+            except FuturesTimeoutError as exc:
+                raise OGDRequestError(
+                    "Timed out while preparing GRIB assets from OGD cache/download pipeline"
+                ) from exc
         resolved: List[str] = []
         for _, cache_path in work:
             resolved.append(cache_path.resolve().as_uri())
@@ -2484,7 +2498,11 @@ class ForecastStore:
                 LOGGER.debug("GRIB asset cache hit path=%s", cache_path.name)
                 return
         try:
-            resp = requests.get(url_text, stream=True, timeout=(10, 180))
+            resp = requests.get(
+                url_text,
+                stream=True,
+                timeout=(GRIB_DOWNLOAD_CONNECT_TIMEOUT_SECONDS, GRIB_DOWNLOAD_READ_TIMEOUT_SECONDS),
+            )
             resp.raise_for_status()
             with tmp_path.open("wb") as fh:
                 for chunk in resp.iter_content(chunk_size=1024 * 1024):

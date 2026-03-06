@@ -121,18 +121,21 @@ def render_tile_rgba(
     h, w = field.shape
     lon_span = max(1e-9, float(bounds["max_lon"] - bounds["min_lon"]))
     lat_span = max(1e-9, float(bounds["max_lat"] - bounds["min_lat"]))
-    x_idx = np.clip(
-        np.round((lon - bounds["min_lon"]) / lon_span * (w - 1)).astype(int),
-        0,
-        w - 1,
-    )
-    y_idx = np.clip(
-        np.round((bounds["max_lat"] - lat) / lat_span * (h - 1)).astype(int),
-        0,
-        h - 1,
-    )
+    # Bilinear sampling reduces zoom-level aliasing compared to nearest-cell lookup.
+    x_f = np.clip((lon - bounds["min_lon"]) / lon_span * (w - 1), 0.0, float(w - 1))
+    y_f = np.clip((bounds["max_lat"] - lat) / lat_span * (h - 1), 0.0, float(h - 1))
+    x0 = np.floor(x_f).astype(np.int32)
+    y0 = np.floor(y_f).astype(np.int32)
+    x1 = np.clip(x0 + 1, 0, w - 1)
+    y1 = np.clip(y0 + 1, 0, h - 1)
+    dx = x_f - x0
+    dy = y_f - y0
 
-    sampled = field[y_idx, x_idx]
+    v00 = field[y0, x0]
+    v10 = field[y0, x1]
+    v01 = field[y1, x0]
+    v11 = field[y1, x1]
+    sampled = v00 * (1.0 - dx) * (1.0 - dy) + v10 * dx * (1.0 - dy) + v01 * (1.0 - dx) * dy + v11 * dx * dy
     colors = apply_colormap(sampled, variable_id)
 
     rgba[domain_mask, :3] = colors[domain_mask]
