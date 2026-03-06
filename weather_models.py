@@ -3,6 +3,7 @@
 This module is intentionally free of heavy dependencies so it can be imported
 anywhere without side-effects.
 """
+
 from __future__ import annotations
 
 import os
@@ -88,9 +89,7 @@ SUPPORTED_TIME_OPERATORS = {item["time_operator"] for item in TIME_OPERATORS}
 
 HOT_PREWARM_INTERVAL_SECONDS = 300
 HOT_PREWARM_VARIABLES = tuple(
-    v.strip()
-    for v in os.getenv("HOT_PREWARM_VARIABLES", "clct,tot_prec,vmax_10m,t_2m").split(",")
-    if v.strip()
+    v.strip() for v in os.getenv("HOT_PREWARM_VARIABLES", "clct,tot_prec,vmax_10m,t_2m").split(",") if v.strip()
 )
 HOT_PREWARM_TYPES = tuple(
     t.strip()
@@ -159,13 +158,28 @@ OGD_PARAMETER_INFO: Dict[str, Dict[str, str]] = {
     "CEILING": {"long_name": "Cloud ceiling", "standard_unit": "m"},
     "HZEROCL": {"long_name": "Freezing level height", "standard_unit": "m"},
     "W_SNOW": {"long_name": "Snow water equivalent", "standard_unit": "kg m-2"},
-    "SNOW_GSP": {"long_name": "Large-scale snowfall water equivalent", "standard_unit": "kg m-2 s-1"},
+    "SNOW_GSP": {
+        "long_name": "Large-scale snowfall water equivalent",
+        "standard_unit": "kg m-2 s-1",
+    },
     "SNOWLMT": {"long_name": "Snowfall limit height", "standard_unit": "m"},
     "DURSUN": {"long_name": "Sunshine duration", "standard_unit": "s"},
-    "ASOB_S": {"long_name": "Net shortwave radiation flux at surface", "standard_unit": "W m-2"},
-    "ATHB_S": {"long_name": "Net longwave radiation flux at surface", "standard_unit": "W m-2"},
-    "ASWDIR_S": {"long_name": "Direct shortwave radiation flux at surface", "standard_unit": "W m-2"},
-    "ASWDIFD_S": {"long_name": "Diffuse shortwave radiation flux at surface", "standard_unit": "W m-2"},
+    "ASOB_S": {
+        "long_name": "Net shortwave radiation flux at surface",
+        "standard_unit": "W m-2",
+    },
+    "ATHB_S": {
+        "long_name": "Net longwave radiation flux at surface",
+        "standard_unit": "W m-2",
+    },
+    "ASWDIR_S": {
+        "long_name": "Direct shortwave radiation flux at surface",
+        "standard_unit": "W m-2",
+    },
+    "ASWDIFD_S": {
+        "long_name": "Diffuse shortwave radiation flux at surface",
+        "standard_unit": "W m-2",
+    },
     "ASHFL_S": {"long_name": "Sensible heat flux at surface", "standard_unit": "W m-2"},
     "ALHFL_S": {"long_name": "Latent heat flux at surface", "standard_unit": "W m-2"},
     "CAPE_ML": {"long_name": "CAPE (mixed layer)", "standard_unit": "J/kg"},

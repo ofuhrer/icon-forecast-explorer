@@ -9,27 +9,94 @@ Applies to the whole repository.
 ## Architecture
 
 - Backend:
-  - `app.py`: FastAPI app, endpoint layer, logging setup, colormap loading, tile rendering.
-  - `weather_models.py`: constants, `OGD_PARAMETER_INFO`, exception classes (`OGDIngestionError` etc.), and frozen dataclasses (`VariableMeta`, `DatasetMeta`).
-  - `weather_cache.py`: standalone (no-`self`) file I/O helpers for field/wind-vector cache files and debug sidecars (`load_cached_field_file`, `save_cached_field_file`, `load_field_debug_info`, `save_field_debug_info`, `safe_unlink`, `parse_iso_duration_hours`, `init_to_iso`, …).
-  - `weather_grib.py`: standalone GRIB/OGD decoding helpers (`decode_param_candidates`, `pick_best_array`, `ogd_variable_candidates`, `horizon_candidates`, `reduce_members`, `member_axis`, `fill_nan_with_neighbors`, `ensure_eccodes_definition_path`, `field_end_step`, `deaggregate_from_reference`).
-  - `weather_data.py`: `ForecastStore` class — catalog refresh/discovery, OGD fetches, field/value/wind-vector caches, unit normalisation, time-operator and de-aggregation logic.  Imports and re-exports symbols from the three sub-modules above so existing callers need no changes.
+  - `app.py`: **Thin FastAPI endpoint wiring only.** Logging setup, CORS, lifespan, and one
+    handler function per API route. Imports pure helpers from the modules below; no business
+    logic lives here. Run with `uvicorn app:app`.
+  - `tile_rendering.py`: Pure colormap and tile-rendering functions — `render_tile_rgba()`,
+    `apply_colormap()`, `_colormap_for_variable()`, `_legend_for_variable()`,
+    `_load_project_colormaps()`, and the `TILE_SIZE` constant. No FastAPI dependency.
+  - `grid_utils.py`: Pure coordinate-transform utilities (`_lon_to_x`, `_lat_to_y`,
+    `_x_to_lon`, `_y_to_lat`, `_coord_key`) plus store-aware helpers (`_dataset_grid_shape`,
+    `_effective_grid_bounds`) that accept an optional `store` argument.
+  - `series_cache.py`: Thread-safe in-memory series-response cache — data structures
+    (`_SERIES_CACHE`, `_SERIES_KEY_LOCKS`), constants (`SERIES_CACHE_TTL_SECONDS`,
+    `SERIES_CACHE_MAX_ENTRIES`, `SERIES_LATLON_BUCKET_DEG`), and all `_series_*` helpers.
+  - `input_validation.py`: FastAPI-aware input validators — `_validate_time_operator()`,
+    `_parse_requested_types()`, `_parse_requested_variables()`; forecast-type constants
+    (`FORECAST_TYPES`, `FORECAST_TYPE_IDS`, `SERIES_FORECAST_TYPE_IDS`).
+  - `weather_models.py`: constants, `OGD_PARAMETER_INFO`, exception classes (`OGDIngestionError`
+    etc.), and frozen dataclasses (`VariableMeta`, `DatasetMeta`).
+  - `weather_cache.py`: standalone (no-`self`) file I/O helpers for field/wind-vector cache
+    files and debug sidecars (`load_cached_field_file`, `save_cached_field_file`,
+    `load_field_debug_info`, `save_field_debug_info`, `safe_unlink`,
+    `parse_iso_duration_hours`, `init_to_iso`, …).
+  - `weather_grib.py`: standalone GRIB/OGD decoding helpers (`decode_param_candidates`,
+    `pick_best_array`, `ogd_variable_candidates`, `horizon_candidates`, `reduce_members`,
+    `member_axis`, `fill_nan_with_neighbors`, `ensure_eccodes_definition_path`,
+    `field_end_step`, `deaggregate_from_reference`).
+  - `weather_data.py`: `ForecastStore` class — catalog refresh/discovery, OGD fetches,
+    field/value/wind-vector caches, unit normalisation, time-operator and de-aggregation
+    logic.  Imports and re-exports symbols from the three sub-modules above so existing
+    callers need no changes.
 - Frontend:
   - `static/index.html`: layout and static asset version query strings.
-  - `static/main.js`: app state, control wiring, map layer logic, hover/value calls, loading overlay, wind vectors, meteogram orchestration.  Organised with `// ─── Section: XXX ───` headers.
-  - `static/styles.css`: control panel + map overlays (summary, legend, centred loading status).
+  - `static/main.js`: app state, control wiring, map layer logic, hover/value calls, loading
+    overlay, wind vectors, meteogram orchestration.  Organised with `// ─── Section: XXX ───`
+    headers.
+  - `static/styles.css`: control panel + map overlays (summary, legend, centred loading
+    status).
   - `static/js/escape.js`: `escapeHtml(str)` utility.
-  - `static/js/search.js`: pure SwissTopo search helpers — `firstSwissTopoResult()`, `normalizeSwissTopoLabel()`.
+  - `static/js/search.js`: pure SwissTopo search helpers — `firstSwissTopoResult()`,
+    `normalizeSwissTopoLabel()`.
   - `static/js/url_state.js`: URL state parsing — `parseUrlState()`.
-  - `static/js/wind_vectors.js`: wind-arrow GeoJSON builder — `buildWindVectorFeatures(vectors, map)`.
-  - `static/js/full_meteogram.js`: full-meteogram constants and pure utility functions (abort/sleep helpers, chart scale/tick formatters, warmup key).
-  - `static/js/animation.js`: placeholder module (animation logic remains in `main.js` Animation section; candidate for future factory-pattern extraction).
-  - `static/js/map_layer.js`: placeholder module (tile-layer logic remains in `main.js` Map Layer section; candidate for future factory-pattern extraction).
-  - `static/js/formatting.js`, `static/js/time_operator.js`, `static/js/ui_text.js`, `static/js/meteogram.js`, `static/js/api.js`: pre-existing focused modules.
+  - `static/js/wind_vectors.js`: wind-arrow GeoJSON builder —
+    `buildWindVectorFeatures(vectors, map)`.
+  - `static/js/full_meteogram.js`: full-meteogram constants and pure utility functions
+    (abort/sleep helpers, chart scale/tick formatters, warmup key).
+  - `static/js/animation.js`: placeholder module (animation logic remains in `main.js`
+    Animation section; candidate for future factory-pattern extraction).
+  - `static/js/map_layer.js`: placeholder module (tile-layer logic remains in `main.js` Map
+    Layer section; candidate for future factory-pattern extraction).
+  - `static/js/formatting.js`, `static/js/time_operator.js`, `static/js/ui_text.js`,
+    `static/js/meteogram.js`, `static/js/api.js`: pre-existing focused modules.
 - Tests:
   - `tests/test_weather_data.py`
   - `tests/test_api_endpoints.py`
   - `tests/test_api_series.py`
+
+## Module Dependency Map
+
+```
+app.py
+ ├── tile_rendering.py   (no further project deps)
+ ├── grid_utils.py
+ │    └── weather_data.py  (SWISS_BOUNDS only)
+ ├── series_cache.py
+ │    ├── grid_utils.py
+ │    └── weather_data.py  (via grid_utils; fastapi HTTPException)
+ ├── input_validation.py
+ │    └── weather_data.py  (SUPPORTED_TIME_OPERATORS only; fastapi HTTPException)
+ └── weather_data.py
+      ├── weather_models.py
+      ├── weather_cache.py
+      └── weather_grib.py
+```
+
+## What Goes Where
+
+| Task | File to edit |
+|------|-------------|
+| Add / modify an API endpoint | `app.py` |
+| Change tile rendering or colormap logic | `tile_rendering.py` |
+| Change coordinate transforms or grid-bounds helpers | `grid_utils.py` |
+| Change series-response caching | `series_cache.py` |
+| Change input validation or forecast-type constants | `input_validation.py` |
+| Change data fetching, field/value caching, or unit conversion | `weather_data.py` |
+| Change data model constants or dataclasses | `weather_models.py` |
+| Change GRIB decoding helpers | `weather_grib.py` |
+| Change field/wind-vector file I/O cache helpers | `weather_cache.py` |
+| Change frontend map/UI behaviour | `static/main.js` |
+| Change focused frontend module | appropriate `static/js/*.js` file |
 
 ## Current Product Behavior (Important)
 
@@ -103,6 +170,7 @@ Applies to the whole repository.
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+pip install -r requirements-dev.txt   # ruff linter/formatter
 uvicorn app:app --reload
 ```
 
@@ -121,8 +189,15 @@ PYTHONPATH=. .venv/bin/python -m unittest discover -s tests -p "test_*.py"
 Quick syntax checks:
 
 ```bash
-python -m py_compile app.py weather_data.py
+python -m py_compile app.py weather_data.py weather_models.py weather_cache.py weather_grib.py tile_rendering.py grid_utils.py series_cache.py input_validation.py
 node --check static/main.js
+```
+
+Lint and format (must pass before committing):
+
+```bash
+ruff check app.py weather_data.py weather_models.py weather_cache.py weather_grib.py tile_rendering.py grid_utils.py series_cache.py input_validation.py
+ruff format --check app.py weather_models.py weather_cache.py weather_grib.py tile_rendering.py grid_utils.py series_cache.py input_validation.py
 ```
 
 ## API Stability Requirements
@@ -161,6 +236,22 @@ When editing fetch/cache/unit logic:
    - sunshine (`dursun`)
    - accum/average products (`tot_prec`, radiative/flux products).
 4. Validate time operators (`avg/acc/min/max`) at early and later leads.
+
+## CI Checks
+
+The GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every push and PR:
+
+1. **Syntax check** — `python -m py_compile` on all Python source files.
+2. **Lint** — `ruff check` on all Python source files.  Configuration lives in
+   `pyproject.toml` (line length 120, Python 3.11).
+3. **Format** — `ruff format --check` on all Python source files *except*
+   `weather_data.py` (deferred to a dedicated cleanup PR).
+4. **JavaScript syntax** — `node --check static/main.js`.
+5. **Tests** — full unittest suite via `PYTHONPATH=. python -m unittest discover`.
+
+**Agents must ensure all five checks pass before considering a backend task done.**
+Running `ruff check` and `ruff format --check` locally (see commands above) is the
+fastest way to verify this.
 
 ## Editing Guidance
 
