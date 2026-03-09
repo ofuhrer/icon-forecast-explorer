@@ -2,15 +2,26 @@ import unittest
 from unittest.mock import patch
 import json
 from datetime import datetime, timedelta
-import types
+import threading
 
 import numpy as np
 
 from weather_data import DatasetMeta, ForecastStore
-from weather_grib import fill_nan_with_neighbors
+from weather_grib import fill_nan_with_neighbors, reduce_members
 
 
 class WeatherDataTests(unittest.TestCase):
+    def test_upper_air_level_selector_payload_uses_requested_levels(self):
+        store = ForecastStore()
+
+        selector = store.variable_level_selector_payload("temp_3d")
+
+        self.assertTrue(selector["enabled"])
+        self.assertEqual(selector["supported_kinds"], ["pressure", "altitude_msl"])
+        self.assertEqual(selector["default_kind"], "altitude_msl")
+        self.assertEqual(selector["levels"]["pressure"], ["850", "700", "600", "500", "300"])
+        self.assertEqual(selector["levels"]["altitude_msl"], ["1500", "2500", "3000", "4000", "5500", "9000"])
+
     def test_cached_field_does_not_force_refresh_for_unknown_init(self):
         store = ForecastStore()
         with patch.object(store, "refresh_catalog", wraps=store.refresh_catalog) as mocked_refresh:
@@ -212,7 +223,7 @@ class WeatherDataTests(unittest.TestCase):
             with patch.object(
                 store,
                 "get_field",
-                side_effect=lambda dataset_id, variable_id, init_str, lead_hour, type_id="control", time_operator="none": (
+                side_effect=lambda dataset_id, variable_id, init_str, lead_hour, type_id="control", time_operator="none", **kwargs: (
                     base0 if lead_hour == 0 else base1
                 ),
             ):
@@ -227,50 +238,164 @@ class WeatherDataTests(unittest.TestCase):
         np.testing.assert_allclose(field, np.ones((2, 2), dtype=np.float32) * 3.0)
         self.assertEqual(info["window_leads"], [0, 1])
 
-    def test_fetch_constant_field_falls_back_to_constants_asset_when_direct_fetch_fails(self):
+    def test_sample_field_value_returns_none_outside_dataset_bounds(self):
         store = ForecastStore()
-        dataset_id = "icon-ch1-eps-control"
+        field = np.arange(9, dtype=np.float32).reshape(3, 3)
+        value = store._sample_field_value("icon-ch1-eps-control", field, lat=0.0, lon=0.0)
+        self.assertIsNone(value)
 
-        class _FakeURLDataSource:
-            def __init__(self, urls):
-                self.urls = urls
+    def test_background_prewarm_can_restart_after_stop(self):
+        store = ForecastStore()
+        ready = threading.Event()
 
-        class _FakeGribDecoder:
-            def load(self, _source, _query, geo_coords=None):
-                _ = geo_coords
-                return [object()]
+        def _fake_loop():
+            ready.set()
+            store._prewarm_stop.wait(0.05)
 
-        fake_ogd_api = types.SimpleNamespace(
-            data_source=types.SimpleNamespace(URLDataSource=_FakeURLDataSource),
-            grib_decoder=_FakeGribDecoder(),
-            _geo_coords=None,
+        with (
+            patch("weather_data.HOT_PREWARM_ENABLED", True),
+            patch.object(store, "_prewarm_loop", side_effect=_fake_loop),
+        ):
+            store.start_background_prewarm()
+            self.assertTrue(ready.wait(1.0))
+            first_executor = store._background_fetch_executor
+            store.stop_background_prewarm()
+
+            ready.clear()
+            store.start_background_prewarm()
+            self.assertTrue(ready.wait(1.0))
+            self.assertIsNotNone(store._background_fetch_executor)
+            self.assertIsNot(first_executor, store._background_fetch_executor)
+            store.stop_background_prewarm()
+
+    def test_start_background_prewarm_always_queues_static_geometry_warm(self):
+        store = ForecastStore()
+        with (
+            patch("weather_data.HOT_PREWARM_ENABLED", False),
+            patch.object(store, "_queue_static_geometry_warm") as mocked_queue,
+        ):
+            store.start_background_prewarm()
+        mocked_queue.assert_called_once()
+        self.assertFalse(store._prewarm_started)
+        store.stop_background_prewarm()
+
+    def test_target_grid_shape_uses_configured_dimensions(self):
+        store = ForecastStore()
+        self.assertEqual(store.target_grid_shape("icon-ch1-eps-control"), (1759, 1219))
+        self.assertEqual(store.target_grid_shape("icon-ch2-eps-control"), (864, 577))
+
+    def test_grid_bounds_are_static_per_dataset(self):
+        store = ForecastStore()
+        before = store.grid_bounds("icon-ch1-eps-control")
+        store._lock_grid_bounds(
+            "icon-ch1-eps-control",
+            np.array([1.0, 2.0], dtype=np.float32),
+            np.array([3.0, 4.0], dtype=np.float32),
+        )
+        after = store.grid_bounds("icon-ch1-eps-control")
+        self.assertEqual(before, after)
+        self.assertEqual(
+            before,
+            {
+                "min_lat": 42.4608,
+                "max_lat": 50.1249,
+                "min_lon": 0.6199,
+                "max_lon": 16.6238,
+            },
         )
 
-        with patch("weather_data.ensure_eccodes_definition_path", return_value=None), patch.object(
-            store, "init_times", return_value=["2026022500"]
-        ), patch.object(store, "_fetch_direct_regridded", side_effect=RuntimeError("direct fetch failed")), patch.object(
-            store, "_discover_constants_asset_url", return_value="https://example/horizontal_constants_icon-ch1-eps.grib2"
-        ) as mocked_discover, patch.object(
-            store, "_materialize_asset_urls", return_value=["file:///tmp/horizontal_constants_icon-ch1-eps.grib2"]
-        ), patch("weather_data.pick_best_array", return_value=np.ones((2, 2), dtype=np.float32)), patch.object(
-            store, "_regrid_data_array", return_value=np.ones((3, 4), dtype=np.float32) * 123.0
-        ), patch.dict(
-            "sys.modules", {"meteodatalab": types.SimpleNamespace(ogd_api=fake_ogd_api)}
-        ):
-            field = store._fetch_constant_field(dataset_id, "hsurf")
+    def test_ensemble_bundle_computed_once_for_multiple_stats(self):
+        store = ForecastStore()
+        dataset_id = "icon-ch1-eps-control"
+        init = store.init_times(dataset_id)[0]
+        lead = 0
+        variable_id = "t_2m"
+        fields_by_type = {
+            "mean": np.full((2, 2), 1.0, dtype=np.float32),
+            "median": np.full((2, 2), 2.0, dtype=np.float32),
+            "p10": np.full((2, 2), 3.0, dtype=np.float32),
+            "p90": np.full((2, 2), 4.0, dtype=np.float32),
+            "min": np.full((2, 2), 5.0, dtype=np.float32),
+            "max": np.full((2, 2), 6.0, dtype=np.float32),
+        }
+        debug_by_type = {key: {"mode": key, "source_files": ["dummy.grib2"]} for key in fields_by_type}
+        control_field = np.full((2, 2), 7.0, dtype=np.float32)
+        control_debug = {"mode": "control", "source_files": ["dummy.grib2"]}
+        for type_id in fields_by_type:
+            for suffix in (".npz", ".json"):
+                store._field_cache_path(dataset_id, type_id, variable_id, init, lead).with_suffix(suffix).unlink(
+                    missing_ok=True
+                )
+        for suffix in (".npz", ".json"):
+            store._field_cache_path(dataset_id, "control", variable_id, init, lead).with_suffix(suffix).unlink(
+                missing_ok=True
+            )
+        with patch.object(
+            store,
+            "_fetch_and_regrid_ensemble_bundle",
+            return_value=(fields_by_type, debug_by_type, control_field, control_debug),
+        ) as mocked_bundle:
+            mean = store.get_field(dataset_id, variable_id, init, lead, type_id="mean")
+            p10 = store.get_field(dataset_id, variable_id, init, lead, type_id="p10")
+            control = store.get_field(dataset_id, variable_id, init, lead, type_id="control")
+        np.testing.assert_allclose(mean, fields_by_type["mean"])
+        np.testing.assert_allclose(p10, fields_by_type["p10"])
+        np.testing.assert_allclose(control, control_field)
+        mocked_bundle.assert_called_once()
 
-        mocked_discover.assert_called_once()
-        self.assertEqual(field.shape, (3, 4))
-        np.testing.assert_allclose(field, np.ones((3, 4), dtype=np.float32) * 123.0)
+    def test_safe_asset_urls_for_request_caches_request_lookup(self):
+        store = ForecastStore()
+
+        class _FakeRequest:
+            collection = "collection"
+            variable = "T_2M"
+            reference_datetime = "2026-03-08T18:00:00Z"
+            perturbed = True
+            horizon = timedelta(hours=1)
+
+        class _FakeOgdApi:
+            def __init__(self):
+                self.calls = 0
+
+            def get_asset_urls(self, request):
+                self.calls += 1
+                return ["https://example.test/path/file.grib2"]
+
+        fake_ogd = _FakeOgdApi()
+        first = store._safe_asset_urls_for_request(fake_ogd, _FakeRequest())
+        second = store._safe_asset_urls_for_request(fake_ogd, _FakeRequest())
+        self.assertEqual(first, ["https://example.test/path/file.grib2"])
+        self.assertEqual(second, ["https://example.test/path/file.grib2"])
+        self.assertEqual(fake_ogd.calls, 1)
+
+    def test_reduce_members_percentiles_handle_nans(self):
+        members = np.array(
+            [
+                [[1.0, np.nan], [5.0, 1.0]],
+                [[2.0, np.nan], [6.0, 2.0]],
+                [[3.0, 9.0], [7.0, 3.0]],
+                [[4.0, 11.0], [8.0, np.nan]],
+            ],
+            dtype=np.float32,
+        )
+        p10 = reduce_members(members, "p10")
+        median = reduce_members(members, "median")
+        p90 = reduce_members(members, "p90")
+        np.testing.assert_allclose(p10, np.array([[1.3, 9.2], [5.3, 1.2]], dtype=np.float32), atol=1e-5)
+        np.testing.assert_allclose(median, np.array([[2.5, 10.0], [6.5, 2.0]], dtype=np.float32), atol=1e-5)
+        np.testing.assert_allclose(p90, np.array([[3.7, 10.8], [7.7, 2.8]], dtype=np.float32), atol=1e-5)
 
     def test_meteogram_warmup_reuses_completed_job_for_same_request(self):
         store = ForecastStore()
         init = store.init_times("icon-ch1-eps-control")[0]
-        with patch.object(store, "lead_hours_for_init", return_value=[0]), patch.object(
-            store,
-            "_compute_meteogram_warm_tasks",
-            return_value=(1, 1, []),
-        ) as mocked_compute:
+        with (
+            patch.object(store, "lead_hours_for_init", return_value=[0]),
+            patch.object(
+                store,
+                "_compute_meteogram_warm_tasks",
+                return_value=(1, 1, []),
+            ) as mocked_compute,
+        ):
             first = store.start_meteogram_warmup(
                 dataset_id="icon-ch1-eps-control",
                 init_str=init,

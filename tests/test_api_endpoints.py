@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 from unittest.mock import patch
 
@@ -92,16 +93,18 @@ class _FakeStore:
     def variable_lead_display_offset_hours(self, variable_id):
         return 0
 
-    def get_cached_field(self, dataset_id, variable_id, init, lead, type_id="control", time_operator="none"):
+    def get_cached_field(self, dataset_id, variable_id, init, lead, type_id="control", time_operator="none", **kwargs):
         return np.full((380, 540), 5.0, dtype=np.float32)
 
-    def get_field(self, dataset_id, variable_id, init, lead, type_id="control", time_operator="none"):
+    def get_field(self, dataset_id, variable_id, init, lead, type_id="control", time_operator="none", **kwargs):
         return np.full((380, 540), 5.0, dtype=np.float32)
 
-    def get_cached_value(self, dataset_id, variable_id, init, lead, lat, lon, type_id="control", time_operator="none"):
+    def get_cached_value(
+        self, dataset_id, variable_id, init, lead, lat, lon, type_id="control", time_operator="none", **kwargs
+    ):
         return 5.0
 
-    def queue_field_fetch(self, dataset_id, variable_id, init, lead, type_id="control", time_operator="none"):
+    def queue_field_fetch(self, dataset_id, variable_id, init, lead, type_id="control", time_operator="none", **kwargs):
         return True
 
     def get_cached_wind_vectors(self, dataset_id, init, lead, type_id="control", time_operator="none"):
@@ -114,9 +117,23 @@ class _FakeStore:
         return True
 
     def get_field_failure(
-        self, dataset_id, variable_id, init_str, lead_hour, type_id="control", time_operator="none"
+        self, dataset_id, variable_id, init_str, lead_hour, type_id="control", time_operator="none", **kwargs
     ):
         return None
+
+    def get_field_progress(
+        self, dataset_id, variable_id, init_str, lead_hour, type_id="control", time_operator="none", **kwargs
+    ):
+        _ = (dataset_id, variable_id, init_str, lead_hour, type_id, time_operator, kwargs)
+        return {
+            "status": "running",
+            "stage": "download",
+            "title": "Downloading GRIB assets",
+            "message": "1/2 assets ready",
+            "progress_current": 1,
+            "progress_total": 2,
+            "percent": 50,
+        }
 
     def start_meteogram_warmup(self, dataset_id, init_str, variable_ids, type_ids, time_operator="none"):
         _ = (dataset_id, init_str, variable_ids, type_ids, time_operator)
@@ -144,23 +161,19 @@ class _CacheMissStore(_FakeStore):
         super().__init__()
         self.get_field_calls = 0
 
-    def get_cached_field(self, dataset_id, variable_id, init, lead, type_id="control", time_operator="none"):
+    def get_cached_field(self, dataset_id, variable_id, init, lead, type_id="control", time_operator="none", **kwargs):
         return None
 
-    def get_field(self, dataset_id, variable_id, init, lead, type_id="control", time_operator="none"):
+    def get_field(self, dataset_id, variable_id, init, lead, type_id="control", time_operator="none", **kwargs):
         self.get_field_calls += 1
         return np.full((380, 540), 5.0, dtype=np.float32)
 
 
 class _ValueMissStore(_FakeStore):
-    def get_cached_value(self, dataset_id, variable_id, init, lead, lat, lon, type_id="control", time_operator="none"):
+    def get_cached_value(
+        self, dataset_id, variable_id, init, lead, lat, lon, type_id="control", time_operator="none", **kwargs
+    ):
         return None
-
-
-class _ElevationErrorStore(_FakeStore):
-    def get_model_elevation(self, dataset_id, lat, lon):
-        _ = (dataset_id, lat, lon)
-        raise RuntimeError("HSURF unavailable")
 
 
 @unittest.skipIf(app_module is None, "fastapi dependencies not available")
@@ -171,6 +184,10 @@ class ApiEndpointTests(unittest.TestCase):
             payload = app_module.metadata()
         self.assertIn("datasets", payload)
         self.assertEqual(len(payload["datasets"]), 1)
+        variable = payload["datasets"][0]["variables"][0]
+        self.assertEqual(variable["group_id"], "surface")
+        self.assertEqual(variable["group_display_name"], "Surface")
+        self.assertEqual(variable["level_selector"]["enabled"], False)
         self.assertTrue(fake_store.refresh_calls)
         self.assertFalse(fake_store.refresh_calls[-1]["force"])
         self.assertFalse(fake_store.refresh_calls[-1]["blocking"])
@@ -214,6 +231,22 @@ class ApiEndpointTests(unittest.TestCase):
             )
         self.assertEqual(response.media_type, "image/png")
         self.assertEqual(fake_store.get_field_calls, 1)
+
+    def test_field_progress_endpoint_returns_progress_payload(self):
+        fake_store = _FakeStore()
+        with patch.object(app_module, "store", fake_store):
+            payload = asyncio.run(
+                app_module.field_progress(
+                    dataset_id="icon-ch1-eps-control",
+                    variable_id="t_2m",
+                    init="2026022500",
+                    lead=0,
+                    type_id="control",
+                )
+            )
+        self.assertEqual(payload["progress"]["status"], "running")
+        self.assertEqual(payload["progress"]["stage"], "download")
+        self.assertEqual(payload["progress"]["percent"], 50)
 
     def test_value_endpoint_returns_503_when_not_cached(self):
         fake_store = _ValueMissStore()
@@ -259,17 +292,6 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertEqual(payload["status"], "ready")
         self.assertIn("vectors", payload)
         self.assertGreater(len(payload["vectors"]), 0)
-
-    def test_model_elevation_returns_503_on_runtime_error(self):
-        fake_store = _ElevationErrorStore()
-        with patch.object(app_module, "store", fake_store):
-            with self.assertRaises(app_module.HTTPException) as ctx:
-                app_module.model_elevation(
-                    dataset_id="icon-ch1-eps-control",
-                    lat=47.0,
-                    lon=8.0,
-                )
-        self.assertEqual(ctx.exception.status_code, 503)
 
     def test_meteogram_warmup_start_returns_payload(self):
         fake_store = _FakeStore()

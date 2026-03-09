@@ -24,8 +24,11 @@ LOG_LEVEL=DEBUG uvicorn app:app --reload
 ## Current Features
 
 - Map-based field rendering with in-map summary and compact in-map legend.
+- Variable picker grouped by forecast layer family, with level controls shown only for variables that need vertical selection.
+- Upper-air temperature and wind-speed slices on pressure levels or altitude above mean sea level.
 - Basemap menu with SwissTopo, OpenStreetMap, and Carto styles.
 - Delayed centered `Loading...` overlay (to avoid flicker during short loads/animation).
+- Lower-left field-work card for longer uncached requests, showing backend stage/progress such as download, decode, interpolation, regridding, and compute. Live updates are streamed so progress continues even while many map tiles are loading.
 - Wind vectors overlay for `10 m wind speed`.
 - Meteogram for clicked location (`control`, `p10`, `p90`).
 - Time operators for all variables:
@@ -36,6 +39,8 @@ LOG_LEVEL=DEBUG uvicorn app:app --reload
   - `Max 3h`, `Max 6h`, `Max 12h`, `Max 24h`
 - Lead selector quantized by selected time-operator period.
 - Unit normalization and de-aggregation logic for from-reference accumulated/averaged GRIB fields.
+- Static per-dataset display domains for ICON-CH1-EPS and ICON-CH2-EPS, with a cached source-to-grid remap plan reused across runs, variables, and forecast types.
+- Static ICON horizontal coordinates are cached locally and warmed once in the background so fresh processes avoid paying the full geometry-download penalty on the first request.
 
 ## Runtime Configuration
 
@@ -50,6 +55,7 @@ LOG_LEVEL=DEBUG uvicorn app:app --reload
 - `GRIB_DOWNLOAD_CONNECT_TIMEOUT_SECONDS` (`6` default)
 - `GRIB_DOWNLOAD_READ_TIMEOUT_SECONDS` (`20` default)
 - `GRIB_DOWNLOAD_WAIT_TIMEOUT_SECONDS` (`25` default)
+- `GRIB_ASSET_PREPARE_TIMEOUT_SECONDS` (`180` default)
 
 ## Cache Behavior
 
@@ -65,6 +71,8 @@ LOG_LEVEL=DEBUG uvicorn app:app --reload
 - `GET /api/series?...`
 - `GET /api/prefetch?...`
 - `GET /api/field-debug?...`
+- `GET /api/field-progress?...`
+- `GET /api/field-progress-stream?...`
 - `GET /api/wind-vectors?...`
 
 ## Tests

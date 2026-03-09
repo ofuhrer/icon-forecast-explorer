@@ -37,6 +37,8 @@ const state = {
   typeId: null,
   timeOperator: "none",
   variableId: null,
+  levelKind: null,
+  levelValue: null,
   init: null,
   lead: 0,
   leadHours: [],
@@ -46,8 +48,6 @@ const state = {
   pinnedPoint: null,
   pinnedLocationName: "",
   pinnedLocationElevationM: null,
-  pinnedModelElevationM: null,
-  pinnedModelPoint: null,
   seriesData: null,
   seriesDiagnostics: null,
   seriesRequestId: 0,
@@ -61,6 +61,8 @@ const els = {
   timeOperator: document.getElementById("timeOperatorSelect"),
   catalogInfo: document.getElementById("catalogInfo"),
   variable: document.getElementById("variableSelect"),
+  levelRow: document.getElementById("levelRow"),
+  level: document.getElementById("levelSelect"),
   init: document.getElementById("initSelect"),
   lead: document.getElementById("leadRange"),
   leadText: document.getElementById("leadText"),
@@ -70,10 +72,14 @@ const els = {
   legendRamp: document.getElementById("legendRamp"),
   legendLabels: document.getElementById("legendLabels"),
   tileFetchStatus: document.getElementById("tileFetchStatus"),
+  fieldWorkOverlay: document.getElementById("fieldWorkOverlay"),
+  fieldWorkTitle: document.getElementById("fieldWorkTitle"),
+  fieldWorkMessage: document.getElementById("fieldWorkMessage"),
+  fieldWorkProgressFill: document.getElementById("fieldWorkProgressFill"),
+  fieldWorkProgressLabel: document.getElementById("fieldWorkProgressLabel"),
   meteogramBlock: document.getElementById("meteogramBlock"),
   meteogramPoint: document.getElementById("meteogramPoint"),
   meteogramCanvas: document.getElementById("meteogramCanvas"),
-  openFullMeteogramBtn: document.getElementById("openFullMeteogramBtn"),
   fieldDebugInfo: document.getElementById("fieldDebugInfo"),
   mapSummaryLine1: document.getElementById("mapSummaryLine1"),
   mapSummaryLine2: document.getElementById("mapSummaryLine2"),
@@ -105,10 +111,6 @@ let fullMeteogramWindow = null;
 const fullMeteogramSeriesMemo = new Map();
 const FULL_METEOGRAM_POPUP_WIDTH = 800;
 const FULL_METEOGRAM_POPUP_HEIGHT = 1020;
-const MODEL_ELEVATION_MEMO_TTL_MS = 20 * 60 * 1000;
-const MODEL_ELEVATION_FAILURE_COOLDOWN_MS = 10 * 60 * 1000;
-const modelElevationMemo = new Map();
-const modelElevationFailureAt = new Map();
 const BASEMAP_SOURCE_ID = "basemap-source";
 const BASEMAP_LAYER_ID = "basemap-layer";
 const SELECTED_POINT_SOURCE_ID = "selected-point-source";
@@ -342,8 +344,16 @@ let tileRetryBackoffMs = 500;
 let tileUrlNonce = 0;
 const LOADING_OVERLAY_DELAY_MS = 350;
 const LOADING_OVERLAY_DELAY_ANIM_MS = 900;
+const FIELD_WORK_OVERLAY_DELAY_MS = 1200;
+const FIELD_WORK_PROGRESS_POLL_MS = 700;
 let loadingOverlayTimer = null;
 let loadingOverlayPending = false;
+let fieldWorkOverlayTimer = null;
+let fieldWorkProgressPollTimer = null;
+let fieldWorkProgressStream = null;
+let fieldWorkVisible = false;
+let fieldWorkRequestKey = "";
+let fieldWorkLastState = null;
 let fieldUnavailable = false;
 let fieldDebugProbeTimer = null;
 let lastFieldDebugAtMs = 0;
@@ -378,13 +388,27 @@ function computeCurrentViewToken() {
   const typeId = state.typeId || "control";
   const timeOperator = state.timeOperator || "none";
   const variableId = state.variableId || "-";
+  const levelKind = state.levelKind || "-";
+  const levelValue = state.levelValue || "-";
   const init = state.init || "-";
   const lead = Number.isFinite(state.lead) ? String(state.lead) : "-";
-  return `${datasetId}|${typeId}|${timeOperator}|${variableId}|${init}|${lead}|v${tileRequestVersion}`;
+  return `${datasetId}|${typeId}|${timeOperator}|${variableId}|${levelKind}|${levelValue}|${init}|${lead}|v${tileRequestVersion}`;
 }
 
 function refreshCurrentViewToken() {
   currentViewToken = computeCurrentViewToken();
+}
+
+function computeFieldWorkKey() {
+  const datasetId = state.datasetId || "-";
+  const typeId = state.typeId || "control";
+  const timeOperator = state.timeOperator || "none";
+  const variableId = state.variableId || "-";
+  const levelKind = state.levelKind || "-";
+  const levelValue = state.levelValue || "-";
+  const init = state.init || "-";
+  const lead = Number.isFinite(state.lead) ? String(state.lead) : "-";
+  return `${datasetId}|${typeId}|${timeOperator}|${variableId}|${levelKind}|${levelValue}|${init}|${lead}`;
 }
 
 function clearHoverDisplay() {
@@ -451,10 +475,148 @@ function uiTrace(event, extra = {}) {
 
 function sortedVariables(dataset) {
   const vars = Array.isArray(dataset?.variables) ? [...dataset.variables] : [];
-  vars.sort((a, b) =>
-    String(a?.display_name || "").localeCompare(String(b?.display_name || ""), undefined, { sensitivity: "base" })
-  );
+  vars.sort((a, b) => {
+    const groupCmp = String(a?.group_display_name || "").localeCompare(String(b?.group_display_name || ""), undefined, {
+      sensitivity: "base",
+    });
+    if (groupCmp !== 0) {
+      return groupCmp;
+    }
+    return String(a?.display_name || "").localeCompare(String(b?.display_name || ""), undefined, { sensitivity: "base" });
+  });
   return vars;
+}
+
+function selectedDataset() {
+  return state.metadata?.datasets?.find((d) => d.dataset_id === state.datasetId) || null;
+}
+
+function variableMetaForId(dataset, variableId) {
+  return dataset?.variables?.find((v) => v.variable_id === variableId) || null;
+}
+
+function levelKindLabel(levelKind) {
+  if (levelKind === "pressure") {
+    return "Pressure";
+  }
+  if (levelKind === "altitude_msl") {
+    return "Altitude AMSL";
+  }
+  if (levelKind === "height_agl") {
+    return "Height AGL";
+  }
+  return String(levelKind || "");
+}
+
+function formatLevelValueLabel(levelKind, levelValue) {
+  const text = String(levelValue || "");
+  if (!text) {
+    return "";
+  }
+  if (levelKind === "pressure") {
+    return `${text} hPa`;
+  }
+  if (levelKind === "altitude_msl") {
+    return `${text} masl`;
+  }
+  return text;
+}
+
+function variableLevelSelector(variable) {
+  if (!variable || typeof variable !== "object") {
+    return { enabled: false, supported_kinds: [], default_kind: null, levels: {} };
+  }
+  const selector = variable.level_selector || {};
+  const supportedKinds = Array.isArray(selector.supported_kinds) ? selector.supported_kinds.filter(Boolean) : [];
+  return {
+    enabled: Boolean(selector.enabled) && supportedKinds.length > 0,
+    supported_kinds: supportedKinds,
+    default_kind: selector.default_kind || supportedKinds[0] || null,
+    levels: selector.levels && typeof selector.levels === "object" ? selector.levels : {},
+  };
+}
+
+function selectedLevelSummary(variable) {
+  const selector = variableLevelSelector(variable);
+  if (!selector.enabled || !state.levelKind) {
+    return "";
+  }
+  if (!state.levelValue) {
+    return levelKindLabel(state.levelKind);
+  }
+  return `${levelKindLabel(state.levelKind)} ${formatLevelValueLabel(state.levelKind, state.levelValue)}`;
+}
+
+function levelOptionValue(levelKind, levelValue) {
+  return `${String(levelKind || "")}:${String(levelValue || "")}`;
+}
+
+function syncVariableLevelState(variable, preferredKind = state.levelKind, preferredValue = state.levelValue) {
+  const selector = variableLevelSelector(variable);
+  if (!selector.enabled) {
+    state.levelKind = null;
+    state.levelValue = null;
+    if (els.levelRow) els.levelRow.hidden = true;
+    if (els.level) {
+      els.level.innerHTML = "";
+      els.level.disabled = true;
+    }
+    return;
+  }
+
+  const kinds = selector.supported_kinds;
+  const levelKind = kinds.includes(preferredKind) ? preferredKind : selector.default_kind;
+  const rawLevels = Array.isArray(selector.levels?.[levelKind]) ? selector.levels[levelKind] : [];
+  const levels = rawLevels.map((value) => String(value));
+  const levelValue = levels.includes(String(preferredValue)) ? String(preferredValue) : levels[0] || null;
+  state.levelKind = levelKind;
+  state.levelValue = levelValue;
+
+  if (els.level) {
+    els.level.innerHTML = kinds
+      .map((kind) => {
+        const kindLevels = Array.isArray(selector.levels?.[kind]) ? selector.levels[kind].map((value) => String(value)) : [];
+        return `<optgroup label="${escapeHtml(levelKindLabel(kind))}">${kindLevels
+          .map(
+            (value) =>
+              `<option value="${escapeHtml(levelOptionValue(kind, value))}">${escapeHtml(
+                formatLevelValueLabel(kind, value)
+              )}</option>`
+          )
+          .join("")}</optgroup>`;
+      })
+      .join("");
+    if (state.levelValue != null && state.levelKind != null) {
+      els.level.value = levelOptionValue(state.levelKind, state.levelValue);
+    }
+    els.level.disabled = false;
+  }
+  if (els.levelRow) {
+    els.levelRow.hidden = false;
+  }
+}
+
+function renderVariableOptions(dataset, selectedVariableId) {
+  const groups = new Map();
+  for (const variable of sortedVariables(dataset)) {
+    const groupId = String(variable.group_id || "surface");
+    const groupLabel = String(variable.group_display_name || "Surface");
+    if (!groups.has(groupId)) {
+      groups.set(groupId, { label: groupLabel, items: [] });
+    }
+    groups.get(groupId).items.push(variable);
+  }
+  els.variable.innerHTML = Array.from(groups.values())
+    .map(
+      (group) =>
+        `<optgroup label="${escapeHtml(group.label)}">${group.items
+          .map((v) => `<option value="${escapeHtml(v.variable_id)}">${escapeHtml(v.display_name)}</option>`)
+          .join("")}</optgroup>`
+    )
+    .join("");
+  if (selectedVariableId) {
+    els.variable.value = selectedVariableId;
+  }
 }
 
 async function bootstrap() {
@@ -542,6 +704,7 @@ function populateControls(metadata) {
     els.type.innerHTML = "";
     els.variable.innerHTML = "";
     els.init.innerHTML = "";
+    syncVariableLevelState(null, null, null);
     return;
   }
   state.datasetId = datasets[0].dataset_id;
@@ -567,9 +730,8 @@ function populateControls(metadata) {
   state.initToLeads = selectedDataset.init_to_leads || {};
   state.expectedInitToLeads = selectedDataset.expected_init_to_leads || {};
   state.leadHours = selectedDataset.lead_hours || [];
-  els.variable.innerHTML = selectedVariables
-    .map((v) => `<option value="${escapeHtml(v.variable_id)}">${escapeHtml(v.display_name)}</option>`)
-    .join("");
+  renderVariableOptions(selectedDataset, state.variableId);
+  syncVariableLevelState(variableMetaForId(selectedDataset, state.variableId), null, null);
 
   const initTimes = selectedDataset.init_times || [];
   state.init = selectDefaultInit(selectedDataset.dataset_id, initTimes, state.initToLeads);
@@ -590,6 +752,8 @@ async function refreshMetadata({ preserveSelection }) {
     typeId: state.typeId,
     timeOperator: state.timeOperator,
     variableId: state.variableId,
+    levelKind: state.levelKind,
+    levelValue: state.levelValue,
     init: state.init,
     lead: state.lead,
     pinnedPoint: state.pinnedPoint ? { ...state.pinnedPoint } : null,
@@ -631,9 +795,6 @@ async function refreshMetadata({ preserveSelection }) {
       }
       els.timeOperator.value = state.timeOperator;
 
-      els.variable.innerHTML = activeVariables
-        .map((v) => `<option value="${escapeHtml(v.variable_id)}">${escapeHtml(v.display_name)}</option>`)
-        .join("");
       state.initToLeads = activeDataset.init_to_leads || {};
       state.expectedInitToLeads = activeDataset.expected_init_to_leads || {};
       state.leadHours = activeDataset.lead_hours || [];
@@ -643,7 +804,12 @@ async function refreshMetadata({ preserveSelection }) {
       } else if (activeVariables[0]) {
         state.variableId = activeVariables[0].variable_id;
       }
-      els.variable.value = state.variableId;
+      renderVariableOptions(activeDataset, state.variableId);
+      syncVariableLevelState(
+        variableMetaForId(activeDataset, state.variableId),
+        previous.levelKind || null,
+        previous.levelValue || null
+      );
 
       const initTimes = activeDataset.init_times || [];
       renderInitOptions(activeDataset, previous.init);
@@ -666,22 +832,21 @@ async function refreshMetadata({ preserveSelection }) {
     }
   }
 
-  const previousKey = `${previous.datasetId}|${previous.typeId}|${previous.timeOperator}|${previous.variableId}|${previous.init}|${previous.lead}`;
-  const currentKey = `${state.datasetId}|${state.typeId}|${state.timeOperator}|${state.variableId}|${state.init}|${state.lead}`;
+  const previousKey = `${previous.datasetId}|${previous.typeId}|${previous.timeOperator}|${previous.variableId}|${previous.levelKind}|${previous.levelValue}|${previous.init}|${previous.lead}`;
+  const currentKey = `${state.datasetId}|${state.typeId}|${state.timeOperator}|${state.variableId}|${state.levelKind}|${state.levelValue}|${state.init}|${state.lead}`;
   const shouldReloadTiles = !preserveSelection || previousKey !== currentKey;
   if (isMapStyleReady() && shouldReloadTiles) {
     addOrReplaceWeatherLayer({ forceRecreateSource: true });
   }
-    if (state.pinnedPoint) {
-      state.pinnedModelPoint = nearestModelGridPoint(state.datasetId, state.pinnedPoint.lat, state.pinnedPoint.lon);
-      void resolvePinnedPointElevations();
-    }
-    if (state.pinnedPoint && (!preserveSelection || previousKey !== currentKey)) {
-      loadSeriesForPinnedPoint();
-    }
-    updateUrlState();
-    renderRefreshStatus();
-    renderMapSummary();
+  if (state.pinnedPoint) {
+    void resolvePinnedPointElevations();
+  }
+  if (state.pinnedPoint && (!preserveSelection || previousKey !== currentKey)) {
+    loadSeriesForPinnedPoint();
+  }
+  updateUrlState();
+  renderRefreshStatus();
+  renderMapSummary();
 }
 
 function bindEvents() {
@@ -698,10 +863,9 @@ function bindEvents() {
     state.initToLeads = dataset.init_to_leads || {};
     state.expectedInitToLeads = dataset.expected_init_to_leads || {};
     state.leadHours = dataset.lead_hours || [];
-    els.variable.innerHTML = datasetVariables
-      .map((v) => `<option value="${escapeHtml(v.variable_id)}">${escapeHtml(v.display_name)}</option>`)
-      .join("");
     state.variableId = datasetVariables[0]?.variable_id || null;
+    renderVariableOptions(dataset, state.variableId);
+    syncVariableLevelState(variableMetaForId(dataset, state.variableId), null, null);
     const timeOperators =
       state.metadata.time_operators || dataset.time_operators || [{ time_operator: "none", display_name: "None" }];
     els.timeOperator.innerHTML = timeOperators
@@ -718,7 +882,6 @@ function bindEvents() {
     renderRefreshStatus();
     addOrReplaceWeatherLayer({ forceRecreateSource: true });
     if (state.pinnedPoint) {
-      state.pinnedModelPoint = nearestModelGridPoint(state.datasetId, state.pinnedPoint.lat, state.pinnedPoint.lon);
       void resolvePinnedPointElevations();
       loadSeriesForPinnedPoint();
     }
@@ -749,6 +912,7 @@ function bindEvents() {
   els.variable.addEventListener("change", () => {
     stopAnimation();
     state.variableId = els.variable.value;
+    syncVariableLevelState(variableMetaForId(selectedDataset(), state.variableId), null, null);
     setLeadChoicesForCurrentInit(false);
     renderLegend();
     addOrReplaceWeatherLayer({ forceRecreateSource: true });
@@ -761,6 +925,27 @@ function bindEvents() {
     }
     updateUrlState();
   });
+
+  if (els.level) {
+    els.level.addEventListener("change", () => {
+      stopAnimation();
+      const raw = String(els.level.value || "");
+      const sep = raw.indexOf(":");
+      if (sep >= 0) {
+        state.levelKind = raw.slice(0, sep) || null;
+        state.levelValue = raw.slice(sep + 1) || null;
+      } else {
+        state.levelKind = null;
+        state.levelValue = null;
+      }
+      renderMapSummary();
+      addOrReplaceWeatherLayer({ forceRecreateSource: true });
+      if (state.pinnedPoint) {
+        loadSeriesForPinnedPoint();
+      }
+      updateUrlState();
+    });
+  }
 
   els.init.addEventListener("change", () => {
     stopAnimation();
@@ -802,13 +987,6 @@ function bindEvents() {
 
   document.addEventListener("keydown", onLeadKeydown);
 
-  if (els.openFullMeteogramBtn) {
-    els.openFullMeteogramBtn.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      void openFullMeteogramPopup();
-    });
-  }
   if (els.meteogramFlowCloseBtn) {
     els.meteogramFlowCloseBtn.addEventListener("click", () => {
       hideMeteogramFlowOverlay();
@@ -927,6 +1105,10 @@ function bindMapOverlayControls() {
 
   if (els.geoLocateBtn) {
     els.geoLocateBtn.addEventListener("click", () => {
+      if (els.mapSearchInput) {
+        els.mapSearchInput.value = "";
+      }
+      hideSearchSuggestions();
       if (!navigator.geolocation || !map) {
         return;
       }
@@ -1022,8 +1204,6 @@ async function setPinnedPointFromSelection(lat, lon, meta = {}) {
   state.pinnedPoint = { lat: Number(lat), lon: Number(lon) };
   state.pinnedLocationName = String(meta.label || "").trim();
   state.pinnedLocationElevationM = null;
-  state.pinnedModelElevationM = null;
-  state.pinnedModelPoint = nearestModelGridPoint(state.datasetId, lat, lon);
   if (els.meteogramBlock && typeof els.meteogramBlock.open === "boolean") {
     els.meteogramBlock.open = true;
   }
@@ -1031,30 +1211,6 @@ async function setPinnedPointFromSelection(lat, lon, meta = {}) {
   updatePinnedPointText("Loading...");
   schedulePinnedPointDataLoad(meta);
   updateUrlState();
-}
-
-function nearestModelGridPoint(datasetId, lat, lon) {
-  const ds = state.metadata?.datasets?.find((d) => d.dataset_id === datasetId);
-  const width = Number(ds?.target_grid_width);
-  const height = Number(ds?.target_grid_height);
-  const bounds = ds?.bounds || state.metadata?.bounds || null;
-  if (!Number.isFinite(width) || !Number.isFinite(height) || !bounds) {
-    return null;
-  }
-  const minLon = Number(bounds.min_lon);
-  const maxLon = Number(bounds.max_lon);
-  const minLat = Number(bounds.min_lat);
-  const maxLat = Number(bounds.max_lat);
-  if (![minLon, maxLon, minLat, maxLat].every(Number.isFinite)) {
-    return null;
-  }
-  const lonFrac = (Number(lon) - minLon) / Math.max(1e-9, maxLon - minLon);
-  const latFrac = (maxLat - Number(lat)) / Math.max(1e-9, maxLat - minLat);
-  const x = Math.max(0, Math.min(Math.round(lonFrac * (width - 1)), width - 1));
-  const y = Math.max(0, Math.min(Math.round(latFrac * (height - 1)), height - 1));
-  const gridLon = minLon + (x / Math.max(1, width - 1)) * (maxLon - minLon);
-  const gridLat = maxLat - (y / Math.max(1, height - 1)) * (maxLat - minLat);
-  return { lat: gridLat, lon: gridLon };
 }
 
 function updatePinnedPointText(progressText = "") {
@@ -1068,11 +1224,8 @@ function updatePinnedPointText(progressText = "") {
   const prefix = state.pinnedLocationName
     ? `${state.pinnedLocationName} (${state.pinnedPoint.lat.toFixed(3)}, ${state.pinnedPoint.lon.toFixed(3)})`
     : `${state.pinnedPoint.lat.toFixed(3)}, ${state.pinnedPoint.lon.toFixed(3)}`;
-  const actual = Number.isFinite(state.pinnedLocationElevationM) ? `${Math.round(state.pinnedLocationElevationM)} masl` : "n/a masl";
-  const model = Number.isFinite(state.pinnedModelElevationM) ? `${Math.round(state.pinnedModelElevationM)} masl` : "n/a masl";
-  const elevText = ` (${actual}; ICON ${model})`;
   const progress = progressText ? ` - ${progressText}` : "";
-  els.meteogramPoint.textContent = `${prefix}${elevText}${progress}`;
+  els.meteogramPoint.textContent = `${prefix}${progress}`;
 }
 
 async function resolvePinnedPointElevations(meta = {}) {
@@ -1082,13 +1235,7 @@ async function resolvePinnedPointElevations(meta = {}) {
   const controller = new AbortController();
   pinnedElevationAbortController = controller;
   const point = { ...state.pinnedPoint };
-  const modelPoint = state.pinnedModelPoint ? { ...state.pinnedModelPoint } : null;
-  const [actual, model] = await Promise.all([
-    fetchSwissTopoHeight(point.lat, point.lon, meta.easting, meta.northing),
-    modelPoint
-      ? fetchModelElevation(state.datasetId, modelPoint.lat, modelPoint.lon, { signal: controller.signal })
-      : Promise.resolve(null),
-  ]);
+  const actual = await fetchSwissTopoHeight(point.lat, point.lon, meta.easting, meta.northing);
   if (pinnedElevationAbortController === controller) {
     pinnedElevationAbortController = null;
   }
@@ -1099,57 +1246,7 @@ async function resolvePinnedPointElevations(meta = {}) {
     return;
   }
   state.pinnedLocationElevationM = Number.isFinite(actual) ? Number(actual) : null;
-  state.pinnedModelElevationM = Number.isFinite(model) ? Number(model) : null;
   updatePinnedPointText();
-}
-
-
-
-async function fetchModelElevation(datasetId, lat, lon, { signal } = {}) {
-  if (!datasetId || !Number.isFinite(lat) || !Number.isFinite(lon)) {
-    return null;
-  }
-  const now = Date.now();
-  const key = `${datasetId}|${Math.round(Number(lat) * 1000) / 1000}|${Math.round(Number(lon) * 1000) / 1000}`;
-  const memo = modelElevationMemo.get(key);
-  if (memo && now - memo.ts <= MODEL_ELEVATION_MEMO_TTL_MS) {
-    return memo.value;
-  }
-  const failedAt = modelElevationFailureAt.get(String(datasetId));
-  if (Number.isFinite(failedAt) && now - failedAt <= MODEL_ELEVATION_FAILURE_COOLDOWN_MS) {
-    return null;
-  }
-  try {
-    const qs = new URLSearchParams({
-      dataset_id: String(datasetId),
-      lat: String(lat),
-      lon: String(lon),
-    });
-    let payload = null;
-    if (typeof fetchJson === "function") {
-      payload = await fetchJson(`/api/model-elevation?${qs.toString()}`, { signal, timeoutMs: 12000 });
-    } else {
-      const resp = await fetch(`/api/model-elevation?${qs.toString()}`, { signal });
-      if (!resp.ok) {
-        modelElevationFailureAt.set(String(datasetId), now);
-        return null;
-      }
-      payload = await resp.json();
-    }
-    const value = Number(payload?.model_elevation_m);
-    if (Number.isFinite(value)) {
-      modelElevationMemo.set(key, { ts: now, value });
-      modelElevationFailureAt.delete(String(datasetId));
-      return value;
-    }
-    return null;
-  } catch (_err) {
-    if (_err?.name === "AbortError") {
-      return null;
-    }
-    modelElevationFailureAt.set(String(datasetId), now);
-    return null;
-  }
 }
 
 async function fetchSwissTopoHeight(lat, lon, knownEasting = null, knownNorthing = null) {
@@ -1346,8 +1443,13 @@ function isRunComplete(datasetId, initStr, availableLeads) {
 }
 
 function renderLegend() {
-  const dataset = state.metadata.datasets.find((d) => d.dataset_id === state.datasetId);
-  const variable = dataset.variables.find((v) => v.variable_id === state.variableId);
+  const dataset = selectedDataset();
+  const variable = variableMetaForId(dataset, state.variableId);
+  if (!dataset || !variable) {
+    els.legendRamp.style.background = "#d7dde5";
+    els.legendLabels.innerHTML = "";
+    return;
+  }
   const legend = variable.legend;
 
   if (!legend || !legend.colors || !legend.thresholds) {
@@ -1445,7 +1547,9 @@ function weatherTileUrl() {
     state.variableId
   )}/${encodeURIComponent(state.init)}/${state.lead}/{z}/{x}/{y}.png?type_id=${encodeURIComponent(
     state.typeId || "control"
-  )}&time_operator=${encodeURIComponent(state.timeOperator || "none")}&_r=${nonce}&_vt=${encodeURIComponent(
+  )}&time_operator=${encodeURIComponent(state.timeOperator || "none")}&level_kind=${encodeURIComponent(
+    state.levelKind || ""
+  )}&level_value=${encodeURIComponent(state.levelValue || "")}&_r=${nonce}&_vt=${encodeURIComponent(
     currentViewToken
   )}`;
 }
@@ -1796,7 +1900,9 @@ async function requestHoverValue(lat, lon) {
       state.typeId || "control"
     )}&variable_id=${encodeURIComponent(state.variableId)}&init=${encodeURIComponent(
       state.init
-    )}&lead=${state.lead}&time_operator=${encodeURIComponent(state.timeOperator || "none")}&lat=${lat}&lon=${lon}`;
+    )}&lead=${state.lead}&time_operator=${encodeURIComponent(state.timeOperator || "none")}&level_kind=${encodeURIComponent(
+      state.levelKind || ""
+    )}&level_value=${encodeURIComponent(state.levelValue || "")}&lat=${lat}&lon=${lon}`;
     const data = await fetchJson(`${url}&_vt=${encodeURIComponent(requestToken)}`, { signal: abortController.signal });
     if (requestToken !== currentViewToken) {
       return;
@@ -1827,6 +1933,208 @@ function onMapError(event) {
   }
 }
 
+function hideFieldWorkOverlay() {
+  if (fieldWorkOverlayTimer) {
+    clearTimeout(fieldWorkOverlayTimer);
+    fieldWorkOverlayTimer = null;
+  }
+  if (fieldWorkProgressPollTimer) {
+    clearTimeout(fieldWorkProgressPollTimer);
+    fieldWorkProgressPollTimer = null;
+  }
+  if (fieldWorkProgressStream) {
+    fieldWorkProgressStream.close();
+    fieldWorkProgressStream = null;
+  }
+  fieldWorkRequestKey = "";
+  fieldWorkVisible = false;
+  fieldWorkLastState = null;
+  if (els.fieldWorkOverlay) {
+    els.fieldWorkOverlay.hidden = true;
+  }
+}
+
+function setFieldWorkState({ title = "Preparing field", message = "", percent = null, label = "checking..." } = {}) {
+  if (els.fieldWorkTitle) {
+    els.fieldWorkTitle.textContent = String(title || "Preparing field");
+  }
+  if (els.fieldWorkMessage) {
+    els.fieldWorkMessage.textContent = String(message || "");
+  }
+  if (els.fieldWorkProgressFill) {
+    if (Number.isFinite(percent)) {
+      const p = Math.max(0, Math.min(100, Number(percent)));
+      els.fieldWorkProgressFill.style.width = `${p}%`;
+    } else {
+      els.fieldWorkProgressFill.style.width = "12%";
+    }
+  }
+  if (els.fieldWorkProgressLabel) {
+    els.fieldWorkProgressLabel.textContent = String(label || "");
+  }
+}
+
+async function pollFieldWorkProgress(expectedKey) {
+  if (!fetchJson || expectedKey !== computeFieldWorkKey() || weatherLayerUiState !== "loading") {
+    return;
+  }
+  try {
+    const payload = await fetchJson(
+      `/api/field-progress?dataset_id=${encodeURIComponent(state.datasetId)}&type_id=${encodeURIComponent(
+        state.typeId || "control"
+      )}&variable_id=${encodeURIComponent(state.variableId)}&init=${encodeURIComponent(state.init)}&lead=${encodeURIComponent(
+        state.lead
+      )}&time_operator=${encodeURIComponent(state.timeOperator || "none")}&level_kind=${encodeURIComponent(
+        state.levelKind || ""
+      )}&level_value=${encodeURIComponent(state.levelValue || "")}`,
+      { timeoutMs: 10000, cache: "no-store" }
+    );
+    if (expectedKey !== computeFieldWorkKey() || weatherLayerUiState !== "loading") {
+      return;
+    }
+    const progress = payload?.progress || {};
+    const percent = Number.isFinite(Number(progress?.percent)) ? Number(progress.percent) : null;
+    let label = "working...";
+    if (Number.isFinite(percent)) {
+      label = `${Math.round(percent)}%`;
+    } else if (Number.isFinite(Number(progress?.progress_current)) && Number.isFinite(Number(progress?.progress_total))) {
+      label = `${Number(progress.progress_current)}/${Number(progress.progress_total)}`;
+    }
+    setFieldWorkState({
+      title: String(progress?.title || "Preparing field"),
+      message: String(progress?.message || "Working..."),
+      percent,
+      label,
+    });
+    fieldWorkLastState = {
+      title: String(progress?.title || "Preparing field"),
+      message: String(progress?.message || "Working..."),
+      percent,
+      label,
+    };
+  } catch (_err) {
+    if (expectedKey !== computeFieldWorkKey() || weatherLayerUiState !== "loading") {
+      return;
+    }
+    if (!fieldWorkLastState) {
+      fieldWorkLastState = {
+        title: "Preparing field",
+        message: "Waiting for backend progress...",
+        percent: null,
+        label: "checking...",
+      };
+    }
+    if (fieldWorkVisible) {
+      setFieldWorkState(fieldWorkLastState);
+    }
+  } finally {
+    if (expectedKey === computeFieldWorkKey() && weatherLayerUiState === "loading") {
+      fieldWorkProgressPollTimer = setTimeout(() => {
+        void pollFieldWorkProgress(expectedKey);
+      }, FIELD_WORK_PROGRESS_POLL_MS);
+    }
+  }
+}
+
+function fieldWorkProgressUrl() {
+  return `/api/field-progress-stream?dataset_id=${encodeURIComponent(state.datasetId)}&type_id=${encodeURIComponent(
+    state.typeId || "control"
+  )}&variable_id=${encodeURIComponent(state.variableId)}&init=${encodeURIComponent(state.init)}&lead=${encodeURIComponent(
+    state.lead
+  )}&time_operator=${encodeURIComponent(state.timeOperator || "none")}&level_kind=${encodeURIComponent(
+    state.levelKind || ""
+  )}&level_value=${encodeURIComponent(state.levelValue || "")}`;
+}
+
+function applyFieldWorkProgressPayload(expectedKey, payload) {
+  if (expectedKey !== computeFieldWorkKey() || weatherLayerUiState !== "loading") {
+    return;
+  }
+  const progress = payload?.progress || {};
+  const percent = Number.isFinite(Number(progress?.percent)) ? Number(progress.percent) : null;
+  let label = "working...";
+  if (Number.isFinite(percent)) {
+    label = `${Math.round(percent)}%`;
+  } else if (Number.isFinite(Number(progress?.progress_current)) && Number.isFinite(Number(progress?.progress_total))) {
+    label = `${Number(progress.progress_current)}/${Number(progress.progress_total)}`;
+  }
+  fieldWorkLastState = {
+    title: String(progress?.title || "Preparing field"),
+    message: String(progress?.message || "Working..."),
+    percent,
+    label,
+  };
+  if (fieldWorkVisible) {
+    setFieldWorkState(fieldWorkLastState);
+  }
+  if (progress?.status === "ready" || progress?.status === "error") {
+    if (fieldWorkProgressStream) {
+      fieldWorkProgressStream.close();
+      fieldWorkProgressStream = null;
+    }
+  }
+}
+
+function startFieldWorkProgressStream(expectedKey) {
+  if (fieldWorkProgressStream) {
+    fieldWorkProgressStream.close();
+    fieldWorkProgressStream = null;
+  }
+  if (typeof window.EventSource !== "function") {
+    void pollFieldWorkProgress(expectedKey);
+    return;
+  }
+  const stream = new window.EventSource(fieldWorkProgressUrl());
+  fieldWorkProgressStream = stream;
+  stream.onmessage = (event) => {
+    if (stream !== fieldWorkProgressStream) {
+      return;
+    }
+    try {
+      applyFieldWorkProgressPayload(expectedKey, JSON.parse(String(event.data || "{}")));
+    } catch (_err) {
+      // Ignore malformed progress events and keep the stream alive.
+    }
+  };
+  stream.onerror = () => {
+    if (stream !== fieldWorkProgressStream) {
+      return;
+    }
+    stream.close();
+    fieldWorkProgressStream = null;
+    if (expectedKey === computeFieldWorkKey() && weatherLayerUiState === "loading") {
+      void pollFieldWorkProgress(expectedKey);
+    }
+  };
+}
+
+function scheduleFieldWorkOverlay() {
+  const requestKey = computeFieldWorkKey();
+  if (fieldWorkRequestKey === requestKey) {
+    return;
+  }
+  hideFieldWorkOverlay();
+  fieldWorkRequestKey = requestKey;
+  fieldWorkLastState = {
+    title: "Preparing field",
+    message: "Waiting for backend progress...",
+    percent: null,
+    label: "checking...",
+  };
+  startFieldWorkProgressStream(fieldWorkRequestKey);
+  fieldWorkOverlayTimer = setTimeout(() => {
+    fieldWorkOverlayTimer = null;
+    if (fieldWorkRequestKey !== computeFieldWorkKey() || weatherLayerUiState !== "loading" || fieldUnavailable) {
+      return;
+    }
+    fieldWorkVisible = true;
+    if (els.fieldWorkOverlay) {
+      els.fieldWorkOverlay.hidden = false;
+    }
+    setFieldWorkState(fieldWorkLastState);
+  }, FIELD_WORK_OVERLAY_DELAY_MS);
+}
+
 function setTileLoadingVisible(visible) {
   if (fieldUnavailable && visible) {
     return;
@@ -1840,6 +2148,7 @@ function setTileLoadingVisible(visible) {
     weatherLayerUiState = "loading";
     weatherLayerUiReason = "";
     loadingOverlayPending = true;
+    scheduleFieldWorkOverlay();
     const delayMs = state.isAnimating ? LOADING_OVERLAY_DELAY_ANIM_MS : LOADING_OVERLAY_DELAY_MS;
     loadingOverlayTimer = setTimeout(() => {
       loadingOverlayTimer = null;
@@ -1858,6 +2167,7 @@ function setTileLoadingVisible(visible) {
     }
     els.tileFetchStatus.textContent = "";
     els.tileFetchStatus.classList.remove("loading");
+    hideFieldWorkOverlay();
   }
 }
 
@@ -1876,6 +2186,16 @@ function setTileUnavailable(reason = "Tiles unavailable") {
   clearFieldDebugProbe();
   els.tileFetchStatus.textContent = weatherLayerUiReason;
   els.tileFetchStatus.classList.add("loading");
+  fieldWorkVisible = true;
+  if (els.fieldWorkOverlay) {
+    els.fieldWorkOverlay.hidden = false;
+  }
+  setFieldWorkState({
+    title: "Field unavailable",
+    message: weatherLayerUiReason,
+    percent: null,
+    label: "error",
+  });
 }
 
 function scheduleTileRetry() {
@@ -1965,6 +2285,8 @@ async function loadFieldDebugInfo(requestVersion) {
         typeId
       )}&variable_id=${encodeURIComponent(variableId)}&init=${encodeURIComponent(init)}&lead=${lead}&time_operator=${encodeURIComponent(
         state.timeOperator || "none"
+      )}&level_kind=${encodeURIComponent(state.levelKind || "")}&level_value=${encodeURIComponent(
+        state.levelValue || ""
       )}&_vt=${encodeURIComponent(requestToken)}`,
       { timeoutMs: 4000 }
     );
@@ -2081,8 +2403,8 @@ function renderMapSummary() {
   if (!els.mapSummaryLine1 || !els.mapSummaryLine2 || !els.mapSummaryLine3 || !els.mapSummaryLine4) {
     return;
   }
-  const dataset = state.metadata?.datasets?.find((d) => d.dataset_id === state.datasetId);
-  const variable = dataset?.variables?.find((v) => v.variable_id === state.variableId);
+  const dataset = selectedDataset();
+  const variable = variableMetaForId(dataset, state.variableId);
   const variableName = variable?.display_name || selectedOptionText(els.variable, "-");
   const gribName = String(variable?.grib_name || variable?.variable_id || "-");
   const unitText = String(variable?.display_unit || variable?.unit || variable?.standard_unit || "").trim();
@@ -2093,13 +2415,16 @@ function renderMapSummary() {
   const validText = validDate ? formatSwissLocal(validDate) : "-";
   const statisticText = selectedOptionText(els.type, "-");
   const timeOperatorText = selectedOptionText(els.timeOperator, "None");
+  const levelText = selectedLevelSummary(variable);
 
   els.mapSummaryLine1.textContent = unitText
     ? `${variableName} (${gribName}, ${unitText})`
     : `${variableName} (${gribName})`;
   els.mapSummaryLine2.textContent = `${modelText} ${forecastText} +${displayLead}h`;
   els.mapSummaryLine3.textContent = `Valid time: ${validText}`;
-  els.mapSummaryLine4.textContent = `${statisticText}, ${timeOperatorText}`;
+  els.mapSummaryLine4.textContent = levelText
+    ? `${levelText}, ${statisticText}, ${timeOperatorText}`
+    : `${statisticText}, ${timeOperatorText}`;
 }
 
 function prefetchUpcomingLeads(count) {
@@ -2118,7 +2443,7 @@ function prefetchUpcomingLeads(count) {
 }
 
 function prefetchLead(lead) {
-  const key = `${state.datasetId}|${state.typeId}|${state.timeOperator}|${state.variableId}|${state.init}|${lead}`;
+  const key = `${state.datasetId}|${state.typeId}|${state.timeOperator}|${state.variableId}|${state.levelKind}|${state.levelValue}|${state.init}|${lead}`;
   const now = Date.now();
   const last = prefetchRecentAt.get(key);
   if (prefetchInFlight.has(key)) {
@@ -2133,7 +2458,9 @@ function prefetchLead(lead) {
       state.typeId || "control"
     )}&variable_id=${encodeURIComponent(state.variableId)}&init=${encodeURIComponent(
       state.init
-    )}&lead=${lead}&time_operator=${encodeURIComponent(state.timeOperator || "none")}`,
+    )}&lead=${lead}&time_operator=${encodeURIComponent(state.timeOperator || "none")}&level_kind=${encodeURIComponent(
+      state.levelKind || ""
+    )}&level_value=${encodeURIComponent(state.levelValue || "")}`,
     { timeoutMs: 12000 }
   )
     .catch(() => {})
@@ -2208,6 +2535,10 @@ function onMapMouseMove(e) {
 }
 
 function onMapClick(e) {
+  if (els.mapSearchInput) {
+    els.mapSearchInput.value = "";
+  }
+  hideSearchSuggestions();
   void setPinnedPointFromSelection(Number(e.lngLat.lat), Number(e.lngLat.lng));
 }
 
@@ -2232,7 +2563,9 @@ async function loadSeriesForPinnedPoint() {
     state.variableId
   )}&init=${encodeURIComponent(state.init)}&lat=${lat}&lon=${lon}&types=${encodeURIComponent(
     typeParam
-  )}&time_operator=${encodeURIComponent(state.timeOperator || "none")}`;
+  )}&time_operator=${encodeURIComponent(state.timeOperator || "none")}&level_kind=${encodeURIComponent(
+    state.levelKind || ""
+  )}&level_value=${encodeURIComponent(state.levelValue || "")}`;
   try {
     const cachedData = await fetchJson(`${baseUrl}&cached_only=true&_vt=${encodeURIComponent(requestToken)}`, {
       timeoutMs: 10000,
@@ -3113,9 +3446,7 @@ function renderFullMeteogramWindow(win, dataset, point, panelData) {
   const pointLabel = state.pinnedLocationName
     ? `${state.pinnedLocationName} (${point.lat.toFixed(3)}, ${point.lon.toFixed(3)})`
     : `${point.lat.toFixed(3)}, ${point.lon.toFixed(3)}`;
-  const locationHeight = Number.isFinite(state.pinnedLocationElevationM) ? `${Math.round(state.pinnedLocationElevationM)} masl` : "n/a masl";
-  const modelHeight = Number.isFinite(state.pinnedModelElevationM) ? `${Math.round(state.pinnedModelElevationM)} masl` : "n/a masl";
-  ctx.fillText(`${pointLabel} (${locationHeight}; ICON ${modelHeight})`, left, 69);
+  ctx.fillText(pointLabel, left, 69);
   ctx.textAlign = "right";
   ctx.font = "600 21px IBM Plex Sans, Segoe UI, sans-serif";
   ctx.fillText(initIsoLabel(state.init), right, 48);
@@ -3455,16 +3786,18 @@ function applyUrlState(urlState) {
   els.timeOperator.value = state.timeOperator;
 
   const dsVariables = sortedVariables(ds);
-  els.variable.innerHTML = dsVariables
-    .map((v) => `<option value="${escapeHtml(v.variable_id)}">${escapeHtml(v.display_name)}</option>`)
-    .join("");
   state.variableId =
     (urlState.variableId &&
       dsVariables.some((v) => v.variable_id === urlState.variableId) &&
       urlState.variableId) ||
     dsVariables[0]?.variable_id ||
     null;
-  els.variable.value = state.variableId;
+  renderVariableOptions(ds, state.variableId);
+  syncVariableLevelState(
+    variableMetaForId(ds, state.variableId),
+    urlState.levelKind || null,
+    urlState.levelValue || null
+  );
 
   state.initToLeads = ds.init_to_leads || {};
   state.expectedInitToLeads = ds.expected_init_to_leads || {};
@@ -3501,7 +3834,6 @@ function applyUrlState(urlState) {
       lon: urlState.pointLon,
     };
     state.pinnedLocationName = String(urlState.pointLabel || "");
-    state.pinnedModelPoint = nearestModelGridPoint(state.datasetId, state.pinnedPoint.lat, state.pinnedPoint.lon);
     updatePinnedPointText();
     void resolvePinnedPointElevations();
   }
@@ -3536,6 +3868,8 @@ function updateUrlState() {
   if (state.typeId) params.set("stat", state.typeId);
   if (state.timeOperator && state.timeOperator !== "none") params.set("op", state.timeOperator);
   if (state.variableId) params.set("var", state.variableId);
+  if (state.levelKind) params.set("lvlkind", state.levelKind);
+  if (state.levelValue) params.set("lvl", state.levelValue);
   if (state.init) params.set("run", state.init);
   if (Number.isFinite(state.lead)) params.set("lead", String(state.lead));
   if (els.speedSelect && els.speedSelect.value) params.set("speed", els.speedSelect.value);
@@ -3565,11 +3899,11 @@ function updateUrlState() {
 }
 
 function unitForVariable(variableId) {
-  const dataset = state.metadata.datasets.find((d) => d.dataset_id === state.datasetId);
+  const dataset = selectedDataset();
   if (!dataset) {
     return "";
   }
-  const variable = dataset.variables.find((v) => v.variable_id === variableId);
+  const variable = variableMetaForId(dataset, variableId);
   if (!variable) {
     return "";
   }
@@ -3577,8 +3911,7 @@ function unitForVariable(variableId) {
 }
 
 function variableLeadDisplayOffsetHours() {
-  const dataset = state.metadata?.datasets?.find((d) => d.dataset_id === state.datasetId);
-  const variable = dataset?.variables?.find((v) => v.variable_id === state.variableId);
+  const variable = variableMetaForId(selectedDataset(), state.variableId);
   const offset = Number(variable?.lead_time_display_offset_hours ?? 0);
   return Number.isFinite(offset) ? offset : 0;
 }

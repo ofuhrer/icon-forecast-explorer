@@ -26,6 +26,10 @@
             <label for="variableSelect">Variable</label>
             <select id="variableSelect"></select>
           </div>
+          <div class="controlRow" id="levelRow" hidden>
+            <label for="levelSelect">Level</label>
+            <select id="levelSelect"></select>
+          </div>
           <div class="controlRow">
             <label for="typeSelect">Statistic</label>
             <select id="typeSelect"></select>
@@ -50,21 +54,22 @@
         <details id="meteogramBlock" class="collapsible">
           <summary class="metaLabel">
             <span>Meteogram (click map)</span>
-            <button
-              id="openFullMeteogramBtn"
-              class="meteogramPopupBtn"
-              type="button"
-              title="Open full meteogram"
-              aria-label="Open full meteogram"
-            >
-              ↗
-            </button>
           </summary>
           <div id="meteogramPoint">-</div>
           <canvas id="meteogramCanvas" width="280" height="140"></canvas>
         </details>
         <div id="catalogInfo">Catalog status unavailable</div>
         <div id="fieldDebugInfo"></div>
+        <div id="fieldWorkOverlay" hidden aria-live="polite">
+          <div id="fieldWorkCard">
+            <div id="fieldWorkTitle">Preparing field</div>
+            <div id="fieldWorkMessage">Waiting for status update...</div>
+            <div id="fieldWorkProgressTrack" aria-hidden="true">
+              <div id="fieldWorkProgressFill"></div>
+            </div>
+            <div id="fieldWorkProgressLabel">checking...</div>
+          </div>
+        </div>
       </aside>
       <main id="map">
         <button id="sidebarToggleBtn" class="mapControlBox" type="button" aria-label="Show or hide sidebar">
@@ -125,6 +130,6 @@
 
     <!-- TODO: add SRI integrity hashes -->
     <script src="https://unpkg.com/maplibre-gl@5.3.1/dist/maplibre-gl.js" crossorigin="anonymous"></script>
-    <script src="/main.js?v=20260305h" type="module"></script>
+    <script src="/main.js?v=20260309h" type="module"></script>
   </body>
 </html>

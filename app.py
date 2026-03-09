@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import math
 import os
@@ -15,7 +16,7 @@ import numpy as np
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
 
@@ -226,10 +227,23 @@ def metadata() -> Dict[str, object]:
             )
             long_name = long_name_fn(var.variable_id) if callable(long_name_fn) else var.display_name
             standard_unit = standard_unit_fn(var.variable_id) if callable(standard_unit_fn) else var.unit
+            level_selector_fn = getattr(store, "variable_level_selector_payload", None)
+            level_selector = (
+                level_selector_fn(var.variable_id)
+                if callable(level_selector_fn)
+                else {
+                    "enabled": bool(var.supported_level_kinds),
+                    "supported_kinds": list(var.supported_level_kinds),
+                    "default_kind": var.default_level_kind,
+                    "levels": {},
+                }
+            )
             variables.append(
                 {
                     "variable_id": var.variable_id,
                     "display_name": var.display_name,
+                    "group_id": var.group_id,
+                    "group_display_name": var.group_display_name,
                     "long_name": long_name,
                     "grib_name": grib_name,
                     "standard_unit": standard_unit,
@@ -237,6 +251,7 @@ def metadata() -> Dict[str, object]:
                     "unit": var.unit,
                     "range": [var.min_value, var.max_value],
                     "lead_time_display_offset_hours": int(store.variable_lead_display_offset_hours(var.variable_id)),
+                    "level_selector": level_selector,
                     "default_colormap": VARIABLE_TO_COLORMAP.get(var.variable_id, "default"),
                     "legend": _legend_for_variable(var.variable_id),
                 }
@@ -284,40 +299,84 @@ def value(
     init: str = Query(...),
     lead: int = Query(..., ge=0),
     time_operator: str = Query("none"),
+    level_kind: str | None = Query(None),
+    level_value: str | None = Query(None),
     lat: float = Query(..., ge=-90, le=90),
     lon: float = Query(..., ge=-180, le=180),
 ) -> Dict[str, object]:
     try:
         time_operator = _validate_time_operator(time_operator)
-        val = store.get_cached_value(
-            dataset_id,
-            variable_id,
-            init,
-            lead,
-            lat=lat,
-            lon=lon,
-            type_id=type_id,
-            time_operator=time_operator,
-        )
-        if val is None:
-            queued = store.queue_field_fetch(
+        sample_fn = getattr(store, "_sample_field_value", None)
+        get_cached_field_fn = getattr(store, "get_cached_field", None)
+        if callable(sample_fn) and callable(get_cached_field_fn):
+            field = get_cached_field_fn(
                 dataset_id,
                 variable_id,
                 init,
                 lead,
                 type_id=type_id,
                 time_operator=time_operator,
+                level_kind=level_kind,
+                level_value=level_value,
             )
-            LOGGER.debug(
-                "Value cache miss dataset=%s type=%s var=%s init=%s lead=%s queued=%s",
+            if field is None:
+                queued = store.queue_field_fetch(
+                    dataset_id,
+                    variable_id,
+                    init,
+                    lead,
+                    type_id=type_id,
+                    time_operator=time_operator,
+                    level_kind=level_kind,
+                    level_value=level_value,
+                )
+                LOGGER.debug(
+                    "Value cache miss dataset=%s type=%s var=%s init=%s lead=%s queued=%s",
+                    dataset_id,
+                    type_id,
+                    variable_id,
+                    init,
+                    lead,
+                    queued,
+                )
+                raise HTTPException(status_code=503, detail="Value not cached yet")
+            val = sample_fn(dataset_id, field, lat=lat, lon=lon)
+            if val is None:
+                raise HTTPException(status_code=404, detail="No value at location")
+        else:
+            val = store.get_cached_value(
                 dataset_id,
-                type_id,
                 variable_id,
                 init,
                 lead,
-                queued,
+                lat=lat,
+                lon=lon,
+                type_id=type_id,
+                time_operator=time_operator,
+                level_kind=level_kind,
+                level_value=level_value,
             )
-            raise HTTPException(status_code=503, detail="Value not cached yet")
+            if val is None:
+                queued = store.queue_field_fetch(
+                    dataset_id,
+                    variable_id,
+                    init,
+                    lead,
+                    type_id=type_id,
+                    time_operator=time_operator,
+                    level_kind=level_kind,
+                    level_value=level_value,
+                )
+                LOGGER.debug(
+                    "Value cache miss dataset=%s type=%s var=%s init=%s lead=%s queued=%s",
+                    dataset_id,
+                    type_id,
+                    variable_id,
+                    init,
+                    lead,
+                    queued,
+                )
+                raise HTTPException(status_code=503, detail="Value not cached yet")
     except ValueError as exc:
         LOGGER.warning("Value request invalid: %s", exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -338,31 +397,6 @@ def value(
     }
 
 
-@app.get("/api/model-elevation")
-def model_elevation(
-    dataset_id: str = Query(...),
-    lat: float = Query(..., ge=-90, le=90),
-    lon: float = Query(..., ge=-180, le=180),
-) -> Dict[str, object]:
-    try:
-        elevation_m = store.get_model_elevation(dataset_id, lat=lat, lon=lon)
-    except ValueError as exc:
-        LOGGER.warning("Model elevation request invalid: %s", exc)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        LOGGER.debug("Model elevation request runtime error: %s", exc)
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except Exception as exc:
-        LOGGER.warning("Model elevation request unexpected error: %s", exc)
-        raise HTTPException(status_code=503, detail="Model elevation unavailable") from exc
-    return {
-        "dataset_id": dataset_id,
-        "lat": lat,
-        "lon": lon,
-        "model_elevation_m": round(float(elevation_m), 2),
-    }
-
-
 @app.get("/api/prefetch")
 def prefetch(
     dataset_id: str = Query(...),
@@ -371,6 +405,8 @@ def prefetch(
     init: str = Query(...),
     lead: int = Query(..., ge=0),
     time_operator: str = Query("none"),
+    level_kind: str | None = Query(None),
+    level_value: str | None = Query(None),
 ) -> Dict[str, object]:
     try:
         time_operator = _validate_time_operator(time_operator)
@@ -381,6 +417,8 @@ def prefetch(
             lead,
             type_id=type_id,
             time_operator=time_operator,
+            level_kind=level_kind,
+            level_value=level_value,
         )
         LOGGER.debug(
             "Prefetch request dataset=%s type=%s var=%s init=%s lead=%s queued=%s",
@@ -447,6 +485,8 @@ def field_debug(
     init: str = Query(...),
     lead: int = Query(..., ge=0),
     time_operator: str = Query("none"),
+    level_kind: str | None = Query(None),
+    level_value: str | None = Query(None),
 ) -> Dict[str, object]:
     try:
         time_operator = _validate_time_operator(time_operator)
@@ -457,6 +497,8 @@ def field_debug(
             lead_hour=lead,
             type_id=type_id,
             time_operator=time_operator,
+            level_kind=level_kind,
+            level_value=level_value,
         )
     except ValueError as exc:
         LOGGER.warning("Field debug request invalid: %s", exc)
@@ -469,6 +511,8 @@ def field_debug(
             lead_hour=lead,
             type_id=type_id,
             time_operator=time_operator,
+            level_kind=level_kind,
+            level_value=level_value,
         )
         if failure is not None:
             return {
@@ -478,6 +522,8 @@ def field_debug(
                 "init": init,
                 "lead": lead,
                 "time_operator": time_operator,
+                "level_kind": level_kind,
+                "level_value": level_value,
                 "status": "error",
                 "debug": failure,
             }
@@ -496,6 +542,8 @@ def field_debug(
             lead,
             type_id=type_id,
             time_operator=time_operator,
+            level_kind=level_kind,
+            level_value=level_value,
         )
         return {
             "dataset_id": dataset_id,
@@ -504,6 +552,8 @@ def field_debug(
             "init": init,
             "lead": lead,
             "time_operator": time_operator,
+            "level_kind": level_kind,
+            "level_value": level_value,
             "status": "loading",
             "debug": None,
         }
@@ -514,9 +564,121 @@ def field_debug(
         "init": init,
         "lead": lead,
         "time_operator": time_operator,
+        "level_kind": level_kind,
+        "level_value": level_value,
         "status": "ready",
         "debug": info,
     }
+
+
+@app.get("/api/field-progress")
+async def field_progress(
+    response: Response = None,
+    dataset_id: str = Query(...),
+    type_id: str = Query("control"),
+    variable_id: str = Query(...),
+    init: str = Query(...),
+    lead: int = Query(..., ge=0),
+    time_operator: str = Query("none"),
+    level_kind: str | None = Query(None),
+    level_value: str | None = Query(None),
+) -> Dict[str, object]:
+    try:
+        time_operator = _validate_time_operator(time_operator)
+        level_kind_value = level_kind if isinstance(level_kind, str) and level_kind else None
+        level_value_value = level_value if isinstance(level_value, str) and level_value else None
+        progress = store.get_field_progress(
+            dataset_id=dataset_id,
+            variable_id=variable_id,
+            init_str=init,
+            lead_hour=lead,
+            type_id=type_id,
+            time_operator=time_operator,
+            level_kind=level_kind_value,
+            level_value=level_value_value,
+        )
+        if response is not None:
+            response.headers["Cache-Control"] = "no-store"
+        return {
+            "dataset_id": dataset_id,
+            "type_id": type_id,
+            "variable_id": variable_id,
+            "init": init,
+            "lead": lead,
+            "time_operator": time_operator,
+            "level_kind": level_kind_value,
+            "level_value": level_value_value,
+            "progress": progress,
+        }
+    except ValueError as exc:
+        LOGGER.warning("Field progress request invalid: %s", exc)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/field-progress-stream")
+async def field_progress_stream(
+    request: Request,
+    dataset_id: str = Query(...),
+    type_id: str = Query("control"),
+    variable_id: str = Query(...),
+    init: str = Query(...),
+    lead: int = Query(..., ge=0),
+    time_operator: str = Query("none"),
+    level_kind: str | None = Query(None),
+    level_value: str | None = Query(None),
+) -> StreamingResponse:
+    try:
+        time_operator = _validate_time_operator(time_operator)
+        level_kind_value = level_kind if isinstance(level_kind, str) and level_kind else None
+        level_value_value = level_value if isinstance(level_value, str) and level_value else None
+    except ValueError as exc:
+        LOGGER.warning("Field progress stream request invalid: %s", exc)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    async def event_stream():
+        last_payload = ""
+        while True:
+            if await request.is_disconnected():
+                break
+            progress = store.get_field_progress(
+                dataset_id=dataset_id,
+                variable_id=variable_id,
+                init_str=init,
+                lead_hour=lead,
+                type_id=type_id,
+                time_operator=time_operator,
+                level_kind=level_kind_value,
+                level_value=level_value_value,
+            )
+            payload = json.dumps(
+                {
+                    "dataset_id": dataset_id,
+                    "type_id": type_id,
+                    "variable_id": variable_id,
+                    "init": init,
+                    "lead": lead,
+                    "time_operator": time_operator,
+                    "level_kind": level_kind_value,
+                    "level_value": level_value_value,
+                    "progress": progress,
+                }
+            )
+            if payload != last_payload:
+                yield f"data: {payload}\n\n"
+                last_payload = payload
+            if progress.get("status") in {"ready", "error"}:
+                break
+            await asyncio.sleep(0.5)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-store",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.get("/api/series")
@@ -529,6 +691,8 @@ def series(
     types: str = Query("control,mean,median,p10,p90"),
     cached_only: bool = Query(True),
     time_operator: str = Query("none"),
+    level_kind: str | None = Query(None),
+    level_value: str | None = Query(None),
 ) -> Dict[str, object]:
     req_types = _parse_requested_types(types)
     time_operator = _validate_time_operator(time_operator)
@@ -542,6 +706,8 @@ def series(
         lat,
         lon,
         time_operator,
+        level_kind,
+        level_value,
         store=store,
     )
     cached_payload = _series_cache_get(key)
@@ -562,6 +728,8 @@ def series(
             req_types=req_types,
             cached_only=cached_only,
             time_operator=time_operator,
+            level_kind=level_kind,
+            level_value=level_value,
             store=store,
         )
         _series_cache_put(key, payload)
@@ -579,6 +747,8 @@ def tiles(
     y: int,
     type_id: str = Query("control"),
     time_operator: str = Query("none"),
+    level_kind: str | None = Query(None),
+    level_value: str | None = Query(None),
 ) -> Response:
     try:
         time_operator = _validate_time_operator(time_operator)
@@ -589,6 +759,8 @@ def tiles(
             lead,
             type_id=type_id,
             time_operator=time_operator,
+            level_kind=level_kind,
+            level_value=level_value,
         )
         if field is None:
             failure = store.get_field_failure(
@@ -598,6 +770,8 @@ def tiles(
                 lead_hour=lead,
                 type_id=type_id,
                 time_operator=time_operator,
+                level_kind=level_kind,
+                level_value=level_value,
             )
             if failure is not None:
                 raise RuntimeError(str(failure.get("message", "Asset unavailable")))
@@ -621,6 +795,8 @@ def tiles(
                 lead,
                 type_id=type_id,
                 time_operator=time_operator,
+                level_kind=level_kind,
+                level_value=level_value,
             )
     except ValueError as exc:
         LOGGER.warning("Tile request invalid: %s", exc)

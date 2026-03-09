@@ -14,9 +14,11 @@ FORECAST_TYPES = [
     {"type_id": "median", "display_name": "Median"},
     {"type_id": "p10", "display_name": "10% Percentile"},
     {"type_id": "p90", "display_name": "90% Percentile"},
+    {"type_id": "min", "display_name": "Minimum"},
+    {"type_id": "max", "display_name": "Maximum"},
 ]
 FORECAST_TYPE_IDS = {item["type_id"] for item in FORECAST_TYPES}
-SERIES_FORECAST_TYPE_IDS = FORECAST_TYPE_IDS | {"min", "max"}
+SERIES_FORECAST_TYPE_IDS = FORECAST_TYPE_IDS
 
 
 def _validate_time_operator(value: str) -> str:

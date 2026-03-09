@@ -12,14 +12,14 @@ class _FakeStore:
     def lead_hours_for_init(self, dataset_id, init):
         return [0, 1, 2]
 
-    def get_cached_value(self, dataset_id, variable_id, init, lead, lat, lon, type_id="control", time_operator="none"):
+    def get_cached_value(self, dataset_id, variable_id, init, lead, lat, lon, type_id="control", time_operator="none", **kwargs):
         if lead == 1 and type_id == "p10":
             raise RuntimeError("cached gap")
         if lead == 2:
             return None
         return 5.0 + lead
 
-    def get_value(self, dataset_id, variable_id, init, lead, lat, lon, type_id="control", time_operator="none"):
+    def get_value(self, dataset_id, variable_id, init, lead, lat, lon, type_id="control", time_operator="none", **kwargs):
         if lead == 1 and type_id == "control":
             raise RuntimeError("full fetch failed")
         return 10.0 + lead
@@ -29,10 +29,10 @@ class _ErrorStore:
     def lead_hours_for_init(self, dataset_id, init):
         return [0, 1, 2]
 
-    def get_cached_value(self, dataset_id, variable_id, init, lead, lat, lon, type_id="control", time_operator="none"):
+    def get_cached_value(self, dataset_id, variable_id, init, lead, lat, lon, type_id="control", time_operator="none", **kwargs):
         raise RuntimeError(f"cached fail {type_id} {lead}")
 
-    def get_value(self, dataset_id, variable_id, init, lead, lat, lon, type_id="control", time_operator="none"):
+    def get_value(self, dataset_id, variable_id, init, lead, lat, lon, type_id="control", time_operator="none", **kwargs):
         raise RuntimeError(f"full fail {type_id} {lead}")
 
 
@@ -48,11 +48,11 @@ class _CountingStore:
     def lead_hours_for_init(self, dataset_id, init):
         return [0, 1]
 
-    def get_cached_value(self, dataset_id, variable_id, init, lead, lat, lon, type_id="control", time_operator="none"):
+    def get_cached_value(self, dataset_id, variable_id, init, lead, lat, lon, type_id="control", time_operator="none", **kwargs):
         self.calls += 1
         return 1.0 + lead
 
-    def get_value(self, dataset_id, variable_id, init, lead, lat, lon, type_id="control", time_operator="none"):
+    def get_value(self, dataset_id, variable_id, init, lead, lat, lon, type_id="control", time_operator="none", **kwargs):
         self.calls += 1
         return 2.0 + lead
 
@@ -302,6 +302,14 @@ class ApiSeriesTests(unittest.TestCase):
             keep_key = ("d", "v", "i", ("control",), True, 0, 0, "none")
             app_module._series_cache_put(keep_key, {"ok": True})
         self.assertLessEqual(len(app_module._SERIES_KEY_LOCKS), 64)
+
+    @unittest.skipIf(app_module is None, "fastapi app dependencies not available in current interpreter")
+    def test_series_key_locks_prune_without_cache_entries(self):
+        with patch.object(app_module, "SERIES_CACHE_MAX_ENTRIES", 1):
+            for i in range(70):
+                key = ("d", "v", "i", ("control",), True, ("coord", i, i), "none")
+                app_module._series_key_lock(key)
+        self.assertLessEqual(len(app_module._SERIES_KEY_LOCKS), 6)
 
 
 if __name__ == "__main__":

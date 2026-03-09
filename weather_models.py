@@ -32,7 +32,7 @@ CATALOG_REFRESH_SECONDS = 300
 # Field cache
 # ---------------------------------------------------------------------------
 
-FIELD_CACHE_VERSION = "v7"
+FIELD_CACHE_VERSION = "v12"
 FIELD_CACHE_RETENTION_HOURS = 30
 FIELD_CACHE_CLEANUP_INTERVAL_SECONDS = 300
 FIELD_CACHE_MAX_ENTRIES = int(os.getenv("FIELD_CACHE_MAX_ENTRIES", "2048"))
@@ -218,6 +218,10 @@ class VariableMeta:
     ogd_variable: str | None = None
     ogd_components: Tuple[str, ...] = ()
     lead_time_display_offset_hours: int = 0
+    group_id: str = "surface"
+    group_display_name: str = "Surface"
+    supported_level_kinds: Tuple[str, ...] = ()
+    default_level_kind: str | None = None
 
 
 @dataclass(frozen=True)
@@ -232,3 +236,7 @@ class DatasetMeta:
     target_grid_width: int = 540
     target_grid_height: int = 380
     target_grid_spacing_km: float = 0.0
+    display_min_lat: float = SWISS_BOUNDS["min_lat"]
+    display_max_lat: float = SWISS_BOUNDS["max_lat"]
+    display_min_lon: float = SWISS_BOUNDS["min_lon"]
+    display_max_lon: float = SWISS_BOUNDS["max_lon"]

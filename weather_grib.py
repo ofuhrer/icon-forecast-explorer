@@ -53,7 +53,6 @@ def decode_param_candidates(stac_variable: str) -> List[str]:
         "ALHFL_S": ["ALHFL_S", "alhfl_s"],
         "CAPE_ML": ["CAPE_ML", "cape_ml", "cape"],
         "CIN_ML": ["CIN_ML", "cin_ml", "cin"],
-        "HSURF": ["HSURF", "hsurf", "orog", "z"],
     }
     return mapping.get(upper, [stac_variable, stac_variable.lower()])
 
@@ -94,7 +93,6 @@ def pick_best_array(result_map: Dict[str, object], requested_variable: str):
         "ALHFL_S": ["alhfl_s"],
         "CAPE_ML": ["cape_ml", "cape"],
         "CIN_ML": ["cin_ml", "cin"],
-        "HSURF": ["hsurf", "orog", "z"],
     }
     for alias in aliases.get(requested_variable.upper(), []):
         if alias in result_map:
@@ -185,16 +183,39 @@ def reduce_members(members: np.ndarray, type_id: str) -> np.ndarray:
     if type_id == "mean":
         return np.nanmean(members, axis=0).astype(np.float32)
     if type_id == "median":
-        return np.nanmedian(members, axis=0).astype(np.float32)
+        return _nanquantile_small_member_axis0(members, 50.0)
     if type_id == "p10":
-        return np.nanpercentile(members, 10, axis=0).astype(np.float32)
+        return _nanquantile_small_member_axis0(members, 10.0)
     if type_id == "p90":
-        return np.nanpercentile(members, 90, axis=0).astype(np.float32)
+        return _nanquantile_small_member_axis0(members, 90.0)
     if type_id == "min":
         return np.nanmin(members, axis=0).astype(np.float32)
     if type_id == "max":
         return np.nanmax(members, axis=0).astype(np.float32)
     raise ValueError(f"Unsupported ensemble statistic: {type_id}")
+
+
+def _nanquantile_small_member_axis0(members: np.ndarray, percentile: float) -> np.ndarray:
+    """Fast NaN-aware quantile reduction for small member counts on axis 0."""
+    finite = np.isfinite(members)
+    finite_count = finite.sum(axis=0)
+    if not np.any(finite_count):
+        return np.full(members.shape[1:], np.nan, dtype=np.float32)
+
+    sortable = np.where(finite, members, np.inf)
+    ordered = np.sort(sortable, axis=0)
+
+    positions = np.maximum(finite_count - 1, 0).astype(np.float32) * (float(percentile) / 100.0)
+    lower = np.floor(positions).astype(np.intp)
+    upper = np.ceil(positions).astype(np.intp)
+    weights = positions - lower
+
+    lower_vals = np.take_along_axis(ordered, lower[np.newaxis, ...], axis=0)[0]
+    upper_vals = np.take_along_axis(ordered, upper[np.newaxis, ...], axis=0)[0]
+    out = lower_vals + (upper_vals - lower_vals) * weights
+    out = out.astype(np.float32, copy=False)
+    out[finite_count == 0] = np.nan
+    return out
 
 
 # ---------------------------------------------------------------------------

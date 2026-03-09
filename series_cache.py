@@ -89,6 +89,8 @@ def _series_cache_key(
     lat: float,
     lon: float,
     time_operator: str,
+    level_kind: str | None,
+    level_value: str | None,
     store=None,
 ) -> tuple:
     spatial_token = _series_spatial_cache_token(dataset_id, lat, lon, store=store)
@@ -100,6 +102,8 @@ def _series_cache_key(
         bool(cached_only),
         spatial_token,
         str(time_operator),
+        str(level_kind or ""),
+        str(level_value or ""),
     )
 
 
@@ -137,19 +141,31 @@ def _series_key_lock(key: tuple) -> threading.Lock:
         if lock is None:
             lock = threading.Lock()
             _SERIES_KEY_LOCKS[key] = lock
+        max_entries = _resolve_max_entries()
+        if len(_SERIES_KEY_LOCKS) > max(64, max_entries * 2):
+            _series_prune_orphan_locks_locked(keep_keys={key})
         return lock
 
 
 def _series_prune_orphan_locks() -> None:
     # Keep lock map bounded by dropping locks that no longer have cache entries.
-    max_entries = _resolve_max_entries()
     with _SERIES_KEY_LOCKS_GUARD:
-        if len(_SERIES_KEY_LOCKS) <= max(64, max_entries * 2):
-            return
-        active_keys = set(_SERIES_CACHE.keys())
-        stale = [k for k in _SERIES_KEY_LOCKS.keys() if k not in active_keys]
-        for key in stale:
-            _SERIES_KEY_LOCKS.pop(key, None)
+        _series_prune_orphan_locks_locked()
+
+
+def _series_prune_orphan_locks_locked(keep_keys: set[tuple] | None = None) -> None:
+    max_entries = _resolve_max_entries()
+    if len(_SERIES_KEY_LOCKS) <= max(64, max_entries * 2):
+        return
+    keep = set(keep_keys or ())
+    active_keys = set(_SERIES_CACHE.keys())
+    stale = [
+        key
+        for key, lock in _SERIES_KEY_LOCKS.items()
+        if key not in active_keys and key not in keep and not lock.locked()
+    ]
+    for key in stale:
+        _SERIES_KEY_LOCKS.pop(key, None)
 
 
 def _series_payload_for_request(
@@ -176,6 +192,8 @@ def _build_series_payload(
     req_types: List[str],
     cached_only: bool,
     time_operator: str,
+    level_kind: str | None,
+    level_value: str | None,
     store,
 ) -> Dict[str, object]:
     leads = store.lead_hours_for_init(dataset_id, init)
@@ -202,6 +220,8 @@ def _build_series_payload(
                         lon=lon,
                         type_id=t,
                         time_operator=time_operator,
+                        level_kind=level_kind,
+                        level_value=level_value,
                     )
                 else:
                     v = store.get_value(
@@ -213,6 +233,8 @@ def _build_series_payload(
                         lon=lon,
                         type_id=t,
                         time_operator=time_operator,
+                        level_kind=level_kind,
+                        level_value=level_value,
                     )
                 if v is None:
                     missing_counts[t] += 1
@@ -240,6 +262,8 @@ def _build_series_payload(
         "valid_times_utc": valid_times_utc,
         "values": values_by_type,
         "time_operator": time_operator,
+        "level_kind": level_kind,
+        "level_value": level_value,
         "diagnostics": {
             "cached_only": cached_only,
             "missing_counts": missing_counts,

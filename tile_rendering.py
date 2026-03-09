@@ -54,6 +54,9 @@ def _load_project_colormaps(
 
 
 COLORMAP_REGISTRY, VARIABLE_TO_COLORMAP = _load_project_colormaps(COLORMAP_MANIFEST_PATH)
+for _alias, _base in {"temp_3d": "t_2m", "wind_speed_3d": "wind_speed_10m"}.items():
+    if _alias not in VARIABLE_TO_COLORMAP and _base in VARIABLE_TO_COLORMAP:
+        VARIABLE_TO_COLORMAP[_alias] = VARIABLE_TO_COLORMAP[_base]
 
 
 def _colormap_for_variable(variable_id: str) -> Dict[str, object] | None:
@@ -136,8 +139,11 @@ def render_tile_rgba(
     v01 = field[y1, x0]
     v11 = field[y1, x1]
     sampled = v00 * (1.0 - dx) * (1.0 - dy) + v10 * dx * (1.0 - dy) + v01 * (1.0 - dx) * dy + v11 * dx * dy
+    valid_mask = domain_mask & np.isfinite(sampled)
+    if not np.any(valid_mask):
+        return rgba
     colors = apply_colormap(sampled, variable_id)
 
-    rgba[domain_mask, :3] = colors[domain_mask]
-    rgba[domain_mask, 3] = 170
+    rgba[valid_mask, :3] = colors[valid_mask]
+    rgba[valid_mask, 3] = 170
     return rgba
